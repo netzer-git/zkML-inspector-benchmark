@@ -79,11 +79,29 @@ def match_findings(
     ]
 
     triples: list[tuple[float, int, int]] = []
-    for i in range(m):
-        for j in range(n):
-            sim = backend.score(agent_texts[i], gt_texts[j])
-            if sim >= threshold:
-                triples.append((sim, i, j))
+    judge_bulk = getattr(backend, "judge_bulk", None)
+    if callable(judge_bulk):
+        # Bulk LLM-judge path: one call per agent finding, ranked output
+        # against all GT candidates for this project.
+        from grader.similarity import JudgeCandidate
+
+        candidates = [
+            JudgeCandidate(gt_id=str(j), text=gt_texts[j]) for j in range(n)
+        ]
+        for i in range(m):
+            results = judge_bulk(agent_texts[i], candidates)
+            by_id = {r.gt_id: r for r in results}
+            for j in range(n):
+                r = by_id.get(str(j))
+                if r is not None and r.match_score >= threshold:
+                    triples.append((r.match_score, i, j))
+    else:
+        # Per-pair path for symmetric backends (Jaccard, future TF-IDF, etc.)
+        for i in range(m):
+            for j in range(n):
+                sim = backend.score(agent_texts[i], gt_texts[j])
+                if sim >= threshold:
+                    triples.append((sim, i, j))
 
     # Greedy assignment: sort descending, assign greedily
     triples.sort(key=lambda t: t[0], reverse=True)

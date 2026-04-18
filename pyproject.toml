@@ -21,10 +21,14 @@ dependencies = [
 dev = [
     "pytest>=7.0",
 ]
-# Future similarity backends
+# Similarity backends beyond the built-in Jaccard baseline
 similarity-tfidf = ["scikit-learn>=1.0"]
 similarity-embedding = ["sentence-transformers>=2.0"]
-similarity-llm = ["anthropic>=0.20"]
+similarity-openai = ["openai>=1.0", "python-dotenv>=1.0"]
+similarity-anthropic = ["anthropic>=0.20", "python-dotenv>=1.0"]
+llm = ["openai>=1.0", "anthropic>=0.20", "python-dotenv>=1.0"]
+# Deprecated alias for backwards compatibility; prefer similarity-anthropic.
+similarity-llm = ["anthropic>=0.20", "python-dotenv>=1.0"]
 
 [project.scripts]
 zkml-grader = "grader.cli:main"

@@ -29,7 +29,7 @@ python -m grader \
 
 ## Test fixtures
 
-`grader/tests/test_loader.py` and `grader/tests/test_cli.py` look for `zkMLDataset.xlsx` at the repo root via `Path(__file__).parent.parent.parent / "zkMLDataset.xlsx"`. The xlsx is **not** committed — those tests skip cleanly when it's absent. When the dataset is present, expect 153 tests to pass; without it, 137 pass and 16 skip. `grader/tests/test_agent_output.json` is a hand-crafted agent output used by the CLI integration tests.
+`grader/tests/conftest.py` builds fictional ground-truth (xlsx) and agent-output (JSON) fixtures at session start using synthetic project names (`alpha`, `beta`). **No real dataset content is ever in tests** — deliberately, to avoid leaking ground-truth to anything that reads the test suite. All tests are self-contained; none skip. LLM tests use `MockLLMProvider` from `grader.llm` (no API is ever contacted).
 
 ## Example agent output
 
@@ -58,9 +58,11 @@ Module responsibilities:
 
 - **`grader/loader.py`** — parses the xlsx (ground truth) and the agent JSON. Both must include all 7 fields (severity, category, security-concern, relevant-code, paper-reference, issue-name, issue-explanation). `parse_code_refs` handles the `file:line[-line], file:line` format including unicode en-dashes. Entry IDs are normalized to lowercase as the grouping key. Validation is strict: invalid closed-list values raise `ValueError`.
 
-- **`grader/similarity.py`** — `SimilarityBackend` ABC plus a `JaccardSimilarity` baseline. The matcher and the paper-reference scorer both depend on this interface, so swapping in TF-IDF, embeddings, or LLM-as-judge backends requires no changes elsewhere. Optional dependency groups in `pyproject.toml` (`similarity-tfidf`, `similarity-embedding`, `similarity-llm`) are placeholders for those future backends.
+- **`grader/similarity.py`** — `SimilarityBackend` ABC with two concrete backends: `JaccardSimilarity` (word-overlap baseline, zero deps) and `LLMJudgeSimilarity` (LLM-as-judge via `LLMProvider`). The judge exposes a primary `judge_bulk(agent_text, candidates)` method that scores one agent finding against all GT candidates in a single LLM call, plus a `score(a, b)` compat path (degenerate 1-candidate bulk call) so paper-reference quote scoring still works. `JUDGE_SCHEMA` is strict and used verbatim by both OpenAI `response_format=json_schema` and Anthropic tool-use. Results are cached in-memory by SHA-256 of agent + sorted candidates; the richer `{match_score, same_root_cause, reasoning}` per-pair judgment is available via `last_result_for(agent_text, gt_id)` for future report enrichment (not yet wired into the report).
 
-- **`grader/matcher.py`** — operates **per-project** (never matches findings across entry-ids). Builds an `M×N` similarity matrix on `name + " " + explanation`, then does greedy 1:1 assignment above a threshold (default 0.3). Issue-ids are GT-only labels — agents produce findings in arbitrary order with no ID correspondence. Unmatched agent findings are exposed via `extra_by_severity` because hallucinated Critical findings are qualitatively different from extra Info suggestions.
+- **`grader/llm.py`** — `LLMProvider` ABC with `OpenAIProvider`, `AnthropicProvider`, `MockLLMProvider`. Provider SDK imports are lazy (inside `__init__`) so the package works without `openai` or `anthropic` installed. `build_config_from_env()` reads `LLM_PROVIDER` (default `openai`), `OPENAI_API_KEY` / `OPENAI_MODEL` (default `gpt-4o`), `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` (default `claude-opus-4-5`). `.env` loading via `python-dotenv` is a soft dependency (silent no-op if not installed).
+
+- **`grader/matcher.py`** — operates **per-project** (never matches findings across entry-ids). Builds an `M×N` similarity matrix on `name + " " + explanation`, then does greedy 1:1 assignment above a threshold (default 0.3). Issue-ids are GT-only labels — agents produce findings in arbitrary order with no ID correspondence. Unmatched agent findings are exposed via `extra_by_severity` because hallucinated Critical findings are qualitatively different from extra Info suggestions. **The matcher detects `backend.judge_bulk` via `getattr` and prefers it** (one call per agent finding) over the M×N per-pair `score()` loop; do not assume either branch is always taken.
 
 - **`grader/scorers.py`** — one function per graded field, each returning `FieldScore(score, detail)`:
   - **Severity** uses an asymmetric 3×3 matrix where under-reporting (Warning when GT is Critical) scores 0.0 but over-reporting gets partial credit (0.25 for one level, 0.1 for two). This is deliberate — missing severity is the worst failure.
@@ -70,12 +72,12 @@ Module responsibilities:
 
 - **`grader/report.py`** — `_compute_pair_score` does weighted averaging of the field scores with **automatic redistribution of skipped fields' weights** to the remaining active ones (this is critical — don't change without updating tests). Default weights: code 0.30, paper 0.25, severity/category/security-concern 0.15 each. Aggregates into per-project metrics (precision, recall, F1, severity-weighted recall, quality, composite) and an overall `benchmark_score = 0.4 * f1 + 0.6 * quality`.
 
-- **`grader/cli.py` / `__main__.py`** — argparse orchestration. `_parse_weights` accepts `key=value` overrides. Projects with no GT are skipped with a printed notice. Weights and threshold are written into the report's `meta` block for reproducibility.
+- **`grader/cli.py` / `__main__.py`** — argparse orchestration. `_parse_weights` accepts `key=value` overrides. Projects with no GT are skipped with a printed notice. Weights and threshold are written into the report's `meta` block for reproducibility. `--backend llm-judge` activates the LLM backend; keys are read from `.env` at the repo root (see `.env.example`). `_LLM_PROVIDER_OVERRIDE` is a module-level test seam — tests monkeypatch it with a `MockLLMProvider` to avoid any real API calls.
 
 ### Closed-list constants
 
 Defined in `grader/__init__.py`. Updating these (adding a category, renaming a severity) requires touching multiple places: the constants, the proximity tables in `scorers.py`, the severity matrix and weight in `report.py`, and the corresponding tests. There are 3 severities, 7 categories + Other, and 7 security-concerns + Other.
 
-### Known limitation: matching threshold
+### Backend selection tradeoffs
 
-The Jaccard baseline is intentionally rough. Some obvious matches (e.g., "Lasso not implemented" vs "Lasso Lookup Not Implemented") fall below 0.3 because the texts use different vocabulary. The pluggable `SimilarityBackend` interface is the upgrade path — don't try to fix matching by tweaking the Jaccard scorer or threshold; add a real backend instead.
+Jaccard is intentionally rough — some obvious matches (different vocabulary for the same root cause) fall below 0.3. The upgrade path is `--backend llm-judge`, which is now built. Reach for the LLM backend when matching quality matters; keep Jaccard for CI / fast local iteration. The `same_root_cause` and `reasoning` fields the judge returns are collected (see `LLMJudgeSimilarity.last_result_for`) but are not yet wired into the report output — that's the next iteration.

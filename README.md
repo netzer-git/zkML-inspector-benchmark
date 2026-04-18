@@ -50,6 +50,28 @@ Scores 5 fields per matched finding (severity, category, security-concern, relev
 
 See `grader/` for full module docs and tests under `grader/tests/`.
 
+#### LLM-as-judge backend
+
+The matcher can use an LLM to decide whether an agent finding describes the same root cause as a ground-truth finding, instead of word-overlap similarity. One LLM call is made per agent finding per project (not per pair), so cost scales linearly with agent findings.
+
+```bash
+# Install provider extras (pick one, or use `.[llm]` for both)
+pip install -e .[similarity-openai]     # or .[similarity-anthropic]
+
+# Configure keys
+cp .env.example .env
+# edit .env: set OPENAI_API_KEY (or ANTHROPIC_API_KEY with LLM_PROVIDER=anthropic)
+
+# Run
+python -m grader \
+    --ground-truth zkMLDataset.xlsx \
+    --agent-output agent_results.json \
+    --backend llm-judge \
+    --output grade_report.json
+```
+
+Defaults: `OPENAI_MODEL=gpt-4o`, `ANTHROPIC_MODEL=claude-opus-4-5`. All env vars are documented in `.env.example`.
+
 ### `dataset_loader/` *(planned)*
 
 Given a dataset xlsx, materialize the corresponding (paper PDF, codebase) pairs into a runnable directory layout for the agent. Handles fetching from configured sources (local paths, URLs, git repos).

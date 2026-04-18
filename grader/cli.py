@@ -31,13 +31,37 @@ def _parse_weights(raw: str | None) -> dict[str, float]:
     return weights
 
 
+# Test seam: tests may monkeypatch this attribute with a MockLLMProvider to
+# exercise the llm-judge code path without hitting a real API.
+_LLM_PROVIDER_OVERRIDE = None
+
+
 def _get_backend(name: str) -> SimilarityBackend:
-    backends = {
-        "jaccard": JaccardSimilarity,
-    }
-    if name not in backends:
-        raise ValueError(f"Unknown similarity backend: {name}. Available: {list(backends.keys())}")
-    return backends[name]()
+    if name == "jaccard":
+        return JaccardSimilarity()
+    if name == "llm-judge":
+        from grader.similarity import LLMJudgeSimilarity
+
+        if _LLM_PROVIDER_OVERRIDE is not None:
+            return LLMJudgeSimilarity(_LLM_PROVIDER_OVERRIDE)
+
+        from grader.llm import (
+            build_config_from_env,
+            build_provider,
+            load_dotenv_if_available,
+        )
+        load_dotenv_if_available()
+        try:
+            cfg = build_config_from_env()
+        except Exception as e:
+            raise ValueError(
+                f"llm-judge backend requires env configuration. "
+                f"See .env.example. {e}"
+            ) from e
+        return LLMJudgeSimilarity(build_provider(cfg))
+    raise ValueError(
+        f"Unknown similarity backend: {name}. Available: ['jaccard', 'llm-judge']"
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -59,7 +83,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--backend", default="jaccard",
-        help="Similarity backend: jaccard (default)",
+        help=(
+            "Similarity backend: 'jaccard' (default) or 'llm-judge' "
+            "(requires .env with OPENAI_API_KEY or ANTHROPIC_API_KEY; "
+            "see .env.example)"
+        ),
     )
     parser.add_argument(
         "--weights", default=None,

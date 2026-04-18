@@ -30,22 +30,22 @@ Invalid values cause the grader to exit with a validation error.
 - `Warning`
 - `Info`
 
-**category** — exactly one of:
-- `Under-constrained Circuit`
-- `Protocol/Transcript Logic`
-- `Specification Mismatch`
-- `Numerical/Quantization Bug`
-- `Witness/Commitment Mismatch`
-- `Engineering/Prototype Gap`
+**category** — answers: *"Where exactly did the implementation go wrong?"* Exactly one of:
+- `Under-constrained Circuit` — the R1CS or PLONKish constraints are too "loose," allowing non-deterministic values that the verifier can't catch.
+- `Protocol/Transcript Logic` — errors in the Fiat-Shamir implementation, weak hashing, or missing domain separation (especially common in Sumcheck/GKR rounds).
+- `Specification Mismatch` — the code deviates from the paper or the formal model description (even if not immediately exploitable).
+- `Numerical/Quantization Bug` — precision loss, fixed-point overflows, or rounding biases introduced during the ML-to-Field conversion.
+- `Witness/Commitment Mismatch` — the proof doesn't correctly link the circuit logic to the external data commitments (e.g., the Merkle root of the weights is never checked).
+- `Engineering/Prototype Gap` — "lazy" implementations, such as hardcoded constants, missing range checks, or unoptimized kernels that lead to memory safety issues.
 - `Other`
 
-**security-concern** — exactly one of:
-- `Proof Forgery (Soundness)`
-- `Information Leakage (Privacy)`
-- `Semantic Subversion (Integrity)`
-- `Proof Malleability`
-- `Denial of Proof (Reliability)`
-- `Governance Bypass`
+**security-concern** — answers: *"If an attacker exploits this, what happens to the system's trust assumptions?"* Exactly one of:
+- `Proof Forgery (Soundness)` — a malicious prover can generate a valid proof for an incorrect result or a different model.
+- `Information Leakage (Privacy)` — private data (e.g., user prompts, LLM weights) is partially or fully recoverable from the proof or transcript.
+- `Semantic Subversion (Integrity)` — the proof is mathematically sound, but it binds to the wrong inputs/outputs (e.g., proving the wrong model, or a "deepfake" inference).
+- `Proof Malleability` — an attacker can modify a valid proof into another valid proof without knowing the underlying witnesses.
+- `Denial of Proof (Reliability)` — a vulnerability that prevents an honest prover from generating a valid proof (e.g., crashing the GPU kernel or hitting an unprovable state).
+- `Governance Bypass` — circumventing the auditing/policy layer because the ZK system doesn't actually enforce the claimed audit rules.
 - `Other`
 
 ## Free-text fields
