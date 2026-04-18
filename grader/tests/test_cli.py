@@ -614,11 +614,13 @@ class TestGradeReportBadges:
         assert "\U0001f534" in content  # 🔴
 
 
-class TestJudgeTracePairScoreBreakdown:
-    def test_matched_pair_has_breakdown_section(
+class TestJudgeTraceContent:
+    def test_trace_does_not_include_pair_score_breakdown(
         self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
         reset_override,
     ):
+        """The trace focuses on the judge's view only. Per-field pair-score
+        breakdowns belong in the normal grade report, not the trace."""
         cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
             _bulk_responder({"alpha-01": 0.95, "alpha-02": 0.95,
                              "alpha-03": 0.1, "beta-01": 0.95, "beta-02": 0.1})
@@ -630,32 +632,4 @@ class TestJudgeTracePairScoreBreakdown:
             "--judge-trace", str(trace_path),
         ])
         content = trace_path.read_text(encoding="utf-8")
-        # For a matched pair, the trace should include the pair-score
-        # breakdown section with a per-field table
-        assert "Pair-score breakdown" in content
-        assert "pair_score =" in content
-
-    def test_dup_rank_marker_in_breakdown(
-        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
-        reset_override,
-    ):
-        """When multiple agents match one GT, the breakdown marks primary
-        and duplicate."""
-        # Make EVERY agent rate alpha-01 high so two agents bind to it.
-        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
-            _bulk_responder({
-                "alpha-01": 0.95, "alpha-02": 0.0, "alpha-03": 0.0,
-                "beta-01": 0.95, "beta-02": 0.0,
-            })
-        )
-        trace_path = tmp_path / "trace.md"
-        main([
-            "--ground-truth", str(fictional_xlsx_path),
-            "--agent-output", str(fictional_agent_json_path),
-            "--judge-trace", str(trace_path),
-        ])
-        content = trace_path.read_text(encoding="utf-8")
-        # Two alpha agents both matching alpha-01 -> the trace should flag
-        # the dup case somewhere
-        assert "(primary)" in content
-        assert "dup #1" in content
+        assert "Pair-score breakdown" not in content

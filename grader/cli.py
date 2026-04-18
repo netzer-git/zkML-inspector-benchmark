@@ -231,7 +231,6 @@ def main(argv: list[str] | None = None) -> None:
                 "backend": "llm-judge",
                 "entry_ids": args.entry_id,
             },
-            project_grades=project_grades,
         )
         print(f"Judge trace written to {args.judge_trace}")
 

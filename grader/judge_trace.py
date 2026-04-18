@@ -1,10 +1,11 @@
 """Debug-only markdown renderer for the LLM judge's per-pair decisions.
 
 Produced by the CLI when the user passes `--judge-trace <path>`. Surfaces
-every candidate the judge scored for each agent finding AND the per-field
-pair-score breakdown for every matched pair, so the user can audit both the
-judge's matching quality and the scorer's grading quality. Not part of the
-default run.
+every candidate the judge scored for each agent finding so the user can
+audit the judge's matching quality. Not part of the default run.
+
+The per-field pair-score breakdown lives in the normal grading report, not
+here — the trace focuses strictly on the LLM judge's view.
 """
 
 from __future__ import annotations
@@ -51,65 +52,10 @@ def _find_gt_name(gt_id: str, gt_name_by_id: dict[str, str]) -> str:
     return gt_name_by_id.get(gt_id, "(unknown)")
 
 
-def _render_pair_score_breakdown(
-    gt_id: str,
-    project_grade: Any,  # ProjectGrade | None — kept loose to avoid import cycle
-) -> list[str]:
-    """Render the per-field pair_score breakdown for a MATCHED pair.
-
-    Looks up the PairGrade(s) for this gt_id in the project grade. If the GT
-    has multiple matching agents (N:1), shows each pair individually so the
-    user can see how the GT's combined score was assembled.
-    """
-    if project_grade is None:
-        return []
-    # There may be multiple PairGrades for the same gt_id (N:1 duplicates).
-    pairs = [m for m in project_grade.matches if m.gt_id == gt_id]
-    if not pairs:
-        return []
-
-    lines: list[str] = ["**Pair-score breakdown:**", ""]
-    if len(pairs) > 1:
-        lines.append(
-            f"*{len(pairs)} agent findings matched this GT — each pair is "
-            f"shown below; the GT's combined score is the average.*"
-        )
-        lines.append("")
-
-    for idx, pair in enumerate(pairs):
-        if len(pairs) > 1:
-            dup_label = " (primary)" if pair.dup_rank == 0 else f" (dup #{pair.dup_rank})"
-            lines.append(
-                f"*Pair #{idx + 1}{dup_label}: agent \"{pair.agent_name}\" "
-                f"-> pair_score {pair.pair_score:.2f}*"
-            )
-            lines.append("")
-        lines.append("| Field | Score | Weight | Detail |")
-        lines.append("|-------|-------|--------|--------|")
-        # Iterate in the canonical field order.
-        for field_name in (
-            "severity", "category", "security_concern",
-            "code_location", "paper_reference",
-        ):
-            fs = pair.scores.get(field_name)
-            if fs is None:
-                continue
-            # Weights are not carried on PairGrade; show blank column for now.
-            lines.append(
-                f"| {field_name} | {fs.score:.2f} | - | "
-                f"{_escape_table(fs.detail)} |"
-            )
-        lines.append("")
-        lines.append(f"**pair_score = {pair.pair_score:.3f}**")
-        lines.append("")
-    return lines
-
-
 def _render_one_trace(
     trace: AgentFindingTrace,
     threshold: float,
     gt_name_by_id: dict[str, str],
-    project_grade: Any,  # ProjectGrade | None
 ) -> list[str]:
     """Render one agent-finding section. Returns list of markdown lines."""
     lines: list[str] = []
@@ -155,12 +101,6 @@ def _render_one_trace(
         )
     lines.append("")
 
-    # Pair-score breakdown — only for MATCHED pairs; pulls from project_grade.
-    if trace.matched_gt_id:
-        lines.extend(
-            _render_pair_score_breakdown(trace.matched_gt_id, project_grade)
-        )
-
     lines.append("---")
     lines.append("")
     return lines
@@ -196,7 +136,6 @@ def write_judge_trace(
     path: str,
     match_results: dict[str, MatchResult],
     meta: dict[str, Any],
-    project_grades: dict[str, Any] | None = None,
 ) -> None:
     """Write the debug judge-trace markdown file.
 
@@ -205,12 +144,7 @@ def write_judge_trace(
         match_results: Per-project MatchResult (each carrying .traces).
         meta: Dict with at least: grader_version, timestamp, threshold,
             backend, entry_ids.
-        project_grades: Optional per-project ProjectGrade. When provided, each
-            MATCHED pair in the trace gains a per-field pair-score breakdown
-            section so the user can audit the scorer's decisions.
     """
-    project_grades = project_grades or {}
-
     lines: list[str] = []
     lines.append("# Judge Trace")
     lines.append("")
@@ -246,14 +180,12 @@ def write_judge_trace(
                 lines.append("---")
                 lines.append("")
                 continue
-            pg = project_grades.get(project)
             for trace in mr.traces:
                 lines.extend(
                     _render_one_trace(
                         trace,
                         threshold=float(meta.get("threshold", 0.3)),
                         gt_name_by_id=gt_name_by_id,
-                        project_grade=pg,
                     )
                 )
 
