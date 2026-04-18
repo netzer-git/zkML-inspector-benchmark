@@ -59,53 +59,52 @@ class TestParseJudgeResponse:
         candidates = [JudgeCandidate("a", "x"), JudgeCandidate("b", "y")]
         raw = {
             "judgments": [
-                {"gt_id": "a", "match_score": 0.9, "same_root_cause": True, "reasoning": "match"},
-                {"gt_id": "b", "match_score": 0.1, "same_root_cause": False, "reasoning": "no"},
+                {"gt_id": "a", "match_score": 5, "reasoning": "match"},
+                {"gt_id": "b", "match_score": 1, "reasoning": "no"},
             ]
         }
         results = _parse_judge_response(raw, candidates)
         assert len(results) == 2
         assert results[0].gt_id == "a"
-        assert results[0].match_score == 0.9
-        assert results[0].same_root_cause is True
-        assert results[1].match_score == 0.1
+        assert results[0].match_score == 5
+        assert results[1].match_score == 1
 
     def test_preserves_candidate_order(self):
         candidates = [JudgeCandidate("z", ""), JudgeCandidate("a", ""), JudgeCandidate("m", "")]
         raw = {
             "judgments": [
-                {"gt_id": "a", "match_score": 0.5, "same_root_cause": False, "reasoning": ""},
-                {"gt_id": "m", "match_score": 0.7, "same_root_cause": True, "reasoning": ""},
-                {"gt_id": "z", "match_score": 0.2, "same_root_cause": False, "reasoning": ""},
+                {"gt_id": "a", "match_score": 3, "reasoning": ""},
+                {"gt_id": "m", "match_score": 4, "reasoning": ""},
+                {"gt_id": "z", "match_score": 2, "reasoning": ""},
             ]
         }
         results = _parse_judge_response(raw, candidates)
         assert [r.gt_id for r in results] == ["z", "a", "m"]
 
-    def test_missing_candidate_filled_with_zero(self):
+    def test_missing_candidate_filled_with_default(self):
+        """Candidates the LLM forgot get match_score=1 with a canned note."""
         candidates = [JudgeCandidate("a", ""), JudgeCandidate("b", "")]
         raw = {
             "judgments": [
-                {"gt_id": "a", "match_score": 0.9, "same_root_cause": True, "reasoning": ""},
+                {"gt_id": "a", "match_score": 5, "reasoning": ""},
             ]
         }
         results = _parse_judge_response(raw, candidates)
         assert results[1].gt_id == "b"
-        assert results[1].match_score == 0.0
-        assert results[1].same_root_cause is False
+        assert results[1].match_score == 1
         assert "no judgment" in results[1].reasoning
 
     def test_score_clamped_to_range(self):
         candidates = [JudgeCandidate("a", ""), JudgeCandidate("b", "")]
         raw = {
             "judgments": [
-                {"gt_id": "a", "match_score": 1.5, "same_root_cause": True, "reasoning": ""},
-                {"gt_id": "b", "match_score": -0.3, "same_root_cause": False, "reasoning": ""},
+                {"gt_id": "a", "match_score": 9, "reasoning": ""},
+                {"gt_id": "b", "match_score": 0, "reasoning": ""},
             ]
         }
         results = _parse_judge_response(raw, candidates)
-        assert results[0].match_score == 1.0
-        assert results[1].match_score == 0.0
+        assert results[0].match_score == 5
+        assert results[1].match_score == 1
 
     def test_missing_judgments_key_raises(self):
         with pytest.raises(LLMResponseError, match="judgments"):
@@ -115,22 +114,22 @@ class TestParseJudgeResponse:
         with pytest.raises(LLMResponseError, match="must be a list"):
             _parse_judge_response({"judgments": "oops"}, [JudgeCandidate("a", "")])
 
-    def test_non_numeric_score_defaults_zero(self):
+    def test_non_numeric_score_defaults_one(self):
         candidates = [JudgeCandidate("a", "")]
         raw = {
             "judgments": [
-                {"gt_id": "a", "match_score": "high", "same_root_cause": True, "reasoning": ""},
+                {"gt_id": "a", "match_score": "high", "reasoning": ""},
             ]
         }
         results = _parse_judge_response(raw, candidates)
-        assert results[0].match_score == 0.0
+        assert results[0].match_score == 1
 
     def test_reasoning_truncated_to_400(self):
         candidates = [JudgeCandidate("a", "")]
         long = "x" * 500
         raw = {
             "judgments": [
-                {"gt_id": "a", "match_score": 0.5, "same_root_cause": False, "reasoning": long},
+                {"gt_id": "a", "match_score": 3, "reasoning": long},
             ]
         }
         results = _parse_judge_response(raw, candidates)
@@ -141,7 +140,7 @@ class TestParseJudgeResponse:
 # LLMJudgeSimilarity
 # ---------------------------------------------------------------------------
 
-def _canned_response(score_map: dict[str, float]):
+def _canned_response(score_map: dict[str, int]):
     """Build a callable responder that echoes candidates with scores from the map."""
     import re
 
@@ -151,8 +150,7 @@ def _canned_response(score_map: dict[str, float]):
             "judgments": [
                 {
                     "gt_id": gid,
-                    "match_score": score_map.get(gid, 0.0),
-                    "same_root_cause": score_map.get(gid, 0.0) >= 0.7,
+                    "match_score": score_map.get(gid, 1),
                     "reasoning": f"canned score for {gid}",
                 }
                 for gid in ids
@@ -164,14 +162,13 @@ def _canned_response(score_map: dict[str, float]):
 
 class TestLLMJudgeSimilarity:
     def test_judge_bulk_basic(self):
-        provider = MockLLMProvider(_canned_response({"0": 0.9, "1": 0.2}))
+        provider = MockLLMProvider(_canned_response({"0": 5, "1": 2}))
         judge = LLMJudgeSimilarity(provider)
         candidates = [JudgeCandidate("0", "first"), JudgeCandidate("1", "second")]
         results = judge.judge_bulk("agent", candidates)
         assert len(results) == 2
-        assert results[0].match_score == 0.9
-        assert results[0].same_root_cause is True
-        assert results[1].match_score == 0.2
+        assert results[0].match_score == 5
+        assert results[1].match_score == 2
 
     def test_judge_bulk_empty_candidates_short_circuits(self):
         provider = MockLLMProvider([])
@@ -181,7 +178,7 @@ class TestLLMJudgeSimilarity:
         assert provider.calls == []
 
     def test_judge_bulk_caches_identical_queries(self):
-        provider = MockLLMProvider(_canned_response({"0": 0.9}))
+        provider = MockLLMProvider(_canned_response({"0": 5}))
         judge = LLMJudgeSimilarity(provider)
         candidates = [JudgeCandidate("0", "same text")]
         judge.judge_bulk("agent text", candidates)
@@ -189,7 +186,7 @@ class TestLLMJudgeSimilarity:
         assert len(provider.calls) == 1  # second call hit the cache
 
     def test_judge_bulk_different_inputs_do_not_collide(self):
-        provider = MockLLMProvider(_canned_response({"0": 0.5}))
+        provider = MockLLMProvider(_canned_response({"0": 3}))
         judge = LLMJudgeSimilarity(provider)
         c1 = [JudgeCandidate("0", "text one")]
         c2 = [JudgeCandidate("0", "text two")]
@@ -197,26 +194,29 @@ class TestLLMJudgeSimilarity:
         judge.judge_bulk("agent", c2)
         assert len(provider.calls) == 2
 
-    def test_score_compat_path_returns_match_score(self):
-        provider = MockLLMProvider(_canned_response({"_pair": 0.75}))
+    def test_score_compat_path_returns_float_in_0_1(self):
+        """score() maps the 1..5 judge ordinal to [0, 1] so the
+        paper-reference quote scorer keeps its old contract."""
+        provider = MockLLMProvider(_canned_response({"_pair": 4}))
         judge = LLMJudgeSimilarity(provider)
+        # 4 -> (4-1)/4 = 0.75
         assert judge.score("agent text", "gt text") == 0.75
 
     def test_score_compat_path_one_call_per_invocation(self):
-        provider = MockLLMProvider(_canned_response({"_pair": 0.5}))
+        provider = MockLLMProvider(_canned_response({"_pair": 3}))
         judge = LLMJudgeSimilarity(provider)
         judge.score("a", "b")
         assert len(provider.calls) == 1
 
     def test_last_result_for_returns_structured_judgment(self):
-        provider = MockLLMProvider(_canned_response({"0": 0.9, "1": 0.1}))
+        provider = MockLLMProvider(_canned_response({"0": 5, "1": 1}))
         judge = LLMJudgeSimilarity(provider)
         candidates = [JudgeCandidate("0", "x"), JudgeCandidate("1", "y")]
         judge.judge_bulk("agent", candidates)
         r = judge.last_result_for("agent", "0")
         assert r is not None
         assert isinstance(r, JudgeResult)
-        assert r.match_score == 0.9
+        assert r.match_score == 5
         assert r.reasoning
 
     def test_last_result_for_unknown_returns_none(self):
@@ -224,7 +224,7 @@ class TestLLMJudgeSimilarity:
         assert judge.last_result_for("agent", "unknown") is None
 
     def test_cache_key_ignores_candidate_order(self):
-        provider = MockLLMProvider(_canned_response({"a": 0.1, "b": 0.9}))
+        provider = MockLLMProvider(_canned_response({"a": 1, "b": 5}))
         judge = LLMJudgeSimilarity(provider)
         c1 = [JudgeCandidate("a", "x"), JudgeCandidate("b", "y")]
         c2 = [JudgeCandidate("b", "y"), JudgeCandidate("a", "x")]
@@ -241,7 +241,7 @@ class TestLLMJudgeSimilarity:
 
     def test_system_prompt_injection(self):
         """Custom system prompt flows through to the provider."""
-        provider = MockLLMProvider(_canned_response({"0": 0.5}))
+        provider = MockLLMProvider(_canned_response({"0": 3}))
         judge = LLMJudgeSimilarity(provider, system_prompt="custom sys")
         judge.judge_bulk("agent", [JudgeCandidate("0", "x")])
         system_used = provider.calls[0][0]

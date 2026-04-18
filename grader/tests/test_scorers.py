@@ -32,11 +32,11 @@ class TestScoreSeverity:
 
     def test_over_report_by_one_critical_vs_warning(self):
         r = score_severity("Critical", "Warning")
-        assert r.score == 0.25
+        assert r.score == 0.3
 
     def test_over_report_by_one_warning_vs_info(self):
         r = score_severity("Warning", "Info")
-        assert r.score == 0.25
+        assert r.score == 0.5
 
     def test_over_report_by_two(self):
         r = score_severity("Critical", "Info")
@@ -44,7 +44,7 @@ class TestScoreSeverity:
 
     def test_under_report_warning_vs_critical(self):
         r = score_severity("Warning", "Critical")
-        assert r.score == 0.0
+        assert r.score == 0.3
 
     def test_under_report_info_vs_critical(self):
         r = score_severity("Info", "Critical")
@@ -52,7 +52,7 @@ class TestScoreSeverity:
 
     def test_under_report_info_vs_warning(self):
         r = score_severity("Info", "Warning")
-        assert r.score == 0.0
+        assert r.score == 0.5
 
     def test_invalid_severity(self):
         r = score_severity("High", "Critical")

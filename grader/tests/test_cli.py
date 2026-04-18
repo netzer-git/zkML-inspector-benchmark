@@ -52,8 +52,7 @@ def _bulk_responder(score_map: dict[str, float]):
             "judgments": [
                 {
                     "gt_id": cid,
-                    "match_score": score_map.get(cid, 0.0),
-                    "same_root_cause": score_map.get(cid, 0.0) >= 0.7,
+                    "match_score": score_map.get(cid, 1),
                     "reasoning": f"canned for {cid}",
                 }
                 for cid in ids
@@ -119,8 +118,8 @@ class TestMainEndToEnd:
         fictional_gt_rows, reset_override,
     ):
         cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
-            _bulk_responder({"alpha-01": 0.9, "alpha-02": 0.9, "alpha-03": 0.1,
-                             "beta-01": 0.9, "beta-02": 0.1})
+            _bulk_responder({"alpha-01": 5, "alpha-02": 5, "alpha-03": 1,
+                             "beta-01": 5, "beta-02": 1})
         )
         out_json = str(tmp_path / "report.json")
         main([
@@ -180,11 +179,11 @@ class TestMainEndToEnd:
         main([
             "--ground-truth", str(fictional_xlsx_path),
             "--agent-output", str(fictional_agent_json_path),
-            "--threshold", "0.5",
+            "--threshold", "5",
             "--output", out_json,
         ])
         data = json.loads(Path(out_json).read_text(encoding="utf-8"))
-        assert data["meta"]["match_threshold"] == 0.5
+        assert data["meta"]["match_threshold"] == 5
         assert data["overall"]["total_matched"] <= data["overall"]["total_gt"]
 
     def test_custom_weights(
@@ -300,8 +299,7 @@ class TestPerProjectErrorIsolation:
                 raise RuntimeError("simulated API failure for beta")
             return {
                 "judgments": [
-                    {"gt_id": cid, "match_score": 0.9,
-                     "same_root_cause": True, "reasoning": "canned"}
+                    {"gt_id": cid, "match_score": 5, "reasoning": "canned"}
                     for cid in ids
                 ]
             }
@@ -336,8 +334,7 @@ class TestPerProjectErrorIsolation:
             if ids and ids[0].startswith("beta"):
                 raise RuntimeError("boom")
             return {"judgments": [
-                {"gt_id": cid, "match_score": 0.9,
-                 "same_root_cause": True, "reasoning": ""}
+                {"gt_id": cid, "match_score": 5, "reasoning": ""}
                 for cid in ids
             ]}
 
@@ -482,8 +479,8 @@ class TestJudgeTrace:
         # Mock: alpha-01 matches perfectly; others don't
         cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
             _bulk_responder({
-                "alpha-01": 0.95, "alpha-02": 0.1, "alpha-03": 0.1,
-                "beta-01": 0.95, "beta-02": 0.1,
+                "alpha-01": 5, "alpha-02": 1, "alpha-03": 1,
+                "beta-01": 5, "beta-02": 1,
             })
         )
         trace_path = tmp_path / "trace.md"
@@ -506,7 +503,7 @@ class TestJudgeTrace:
     ):
         """Reasoning is now a column in the candidates table, not a bulleted list."""
         cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
-            _bulk_responder({"alpha-01": 0.9, "alpha-02": 0.2})
+            _bulk_responder({"alpha-01": 5, "alpha-02": 2})
         )
         trace_path = tmp_path / "trace.md"
         main([
@@ -566,8 +563,8 @@ class TestGradeReportBadges:
     ):
         cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
             _bulk_responder({
-                "alpha-01": 0.95, "alpha-02": 0.95, "alpha-03": 0.1,
-                "beta-01": 0.95, "beta-02": 0.1,
+                "alpha-01": 5, "alpha-02": 5, "alpha-03": 1,
+                "beta-01": 5, "beta-02": 1,
             })
         )
         out_md = str(tmp_path / "report.md")
@@ -588,7 +585,7 @@ class TestGradeReportBadges:
         # Force low pair_scores by making the matches clear threshold but
         # agent severity/category/etc differ from GT.
         cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
-            _bulk_responder({"alpha-01": 0.95})
+            _bulk_responder({"alpha-01": 5})
         )
         # Agent output that matches alpha-01 but has mismatched fields so
         # field scores are low.

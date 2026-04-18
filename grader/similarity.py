@@ -43,14 +43,19 @@ class JudgeCandidate:
 
 @dataclass(frozen=True)
 class JudgeResult:
-    """Structured judgment for a single (agent, gt) pair."""
+    """Structured judgment for a single (agent, gt) pair.
+
+    match_score is an integer from 1 to 5. See the judge prompt for the
+    anchored meaning. The matcher treats scores >= threshold (default 4) as
+    matches; no secondary boolean is used.
+    """
     gt_id: str
-    match_score: float        # [0, 1]
-    same_root_cause: bool
+    match_score: int          # integer 1..5 (5 = best)
     reasoning: str
 
 
 # Strict JSON schema used by both OpenAI response_format and Anthropic tool_use.
+# match_score is an integer on a 1..5 ordinal scale.
 JUDGE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -62,11 +67,10 @@ JUDGE_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "properties": {
                     "gt_id": {"type": "string"},
-                    "match_score": {"type": "number", "minimum": 0, "maximum": 1},
-                    "same_root_cause": {"type": "boolean"},
+                    "match_score": {"type": "integer", "minimum": 1, "maximum": 5},
                     "reasoning": {"type": "string", "maxLength": 400},
                 },
-                "required": ["gt_id", "match_score", "same_root_cause", "reasoning"],
+                "required": ["gt_id", "match_score", "reasoning"],
             },
         },
     },
@@ -90,12 +94,13 @@ quantization bugs. A soundness gap lets a malicious prover produce a valid \
 proof of an incorrect result.
 
 For every candidate return:
-- match_score: float in [0, 1], your confidence this is the same finding. \
-Guide: ~0.95 clear match, ~0.7 strong overlap with minor differences, ~0.5 related sub-issue, ~0.25 weak \
-keyword overlap, ~0.05 unrelated.
-- same_root_cause: true only if the same component AND the same failure \
-mode. Can be false even at high match_score for adjacent but distinct issues.
-- reasoning: one short sentence, under 40 words.
+- match_score: integer on the scale 1 to 5:
+  5 = Same finding. Same root cause AND same component. Confident match.
+  4 = Very likely the same finding; wording differs but the bug is the same.
+  3 = Related area or adjacent sub-issue, but NOT the same finding.
+  2 = Weak overlap only (shared domain or keywords).
+  1 = Unrelated.
+- reasoning: one short sentence, under 40 words, justifying the score.
 
 Return exactly one judgment object per candidate, in the order given."""
 
@@ -107,7 +112,7 @@ def _build_user_prompt(agent_text: str, candidates: Sequence[JudgeCandidate]) ->
     lines.append("")
     lines.append(
         'Return JSON: {"judgments": '
-        '[{gt_id, match_score, same_root_cause, reasoning}, ...]}'
+        '[{gt_id, match_score, reasoning}, ...]}'
     )
     return "\n".join(lines)
 
@@ -128,15 +133,14 @@ def _parse_judge_response(
             continue
         gt_id = str(item.get("gt_id", ""))
         try:
-            score = float(item.get("match_score", 0.0))
+            score = int(item.get("match_score", 1))
         except (TypeError, ValueError):
-            score = 0.0
-        score = max(0.0, min(1.0, score))
+            score = 1
+        score = max(1, min(5, score))
         reasoning = str(item.get("reasoning", ""))[:400]
         by_id[gt_id] = JudgeResult(
             gt_id=gt_id,
             match_score=score,
-            same_root_cause=bool(item.get("same_root_cause", False)),
             reasoning=reasoning,
         )
 
@@ -145,7 +149,7 @@ def _parse_judge_response(
         if c.gt_id in by_id:
             out.append(by_id[c.gt_id])
         else:
-            out.append(JudgeResult(c.gt_id, 0.0, False, "no judgment returned"))
+            out.append(JudgeResult(c.gt_id, 1, "no judgment returned"))
     return out
 
 
@@ -167,13 +171,18 @@ class LLMJudgeSimilarity(SimilarityBackend):
         self._last_results: dict[tuple[str, str], JudgeResult] = {}
 
     def score(self, text_a: str, text_b: str) -> float:
-        """Compatibility path — single-candidate bulk call."""
+        """Compatibility path -- single-candidate bulk call.
+
+        Returns a float in [0, 1] to preserve the SimilarityBackend contract.
+        The judge returns a 1..5 integer; we map that linearly to [0, 1] via
+        (score - 1) / 4 so callers like score_paper_reference keep working.
+        """
         results = self.judge_bulk(
             text_a, [JudgeCandidate(gt_id="_pair", text=text_b)]
         )
         if not results:
             return 0.0
-        return results[0].match_score
+        return (results[0].match_score - 1) / 4.0
 
     def judge_bulk(
         self, agent_text: str, candidates: Sequence[JudgeCandidate]

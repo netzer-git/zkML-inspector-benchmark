@@ -497,18 +497,18 @@ def write_markdown_report(report: GradeReport, path: str) -> None:
         if pg.matches:
             lines.append("### Matches\n")
             lines.append(
-                "| | GT ID | GT Name | Agent Name | Similarity | Pair Score | Severity | Category | Security | Code | Paper |"
+                "| GT ID | GT Name | Agent Name | Similarity | Pair Score | Severity | Category | Security | Code | Paper |"
             )
             lines.append(
-                "|---|-------|---------|------------|------------|------------|----------|----------|----------|------|-------|"
+                "|-------|---------|------------|------------|------------|----------|----------|----------|------|-------|"
             )
             for m in pg.matches:
                 s = m.scores
                 badge = _pair_score_badge(m.pair_score)
                 dup_marker = "" if m.dup_rank == 0 else f" (dup #{m.dup_rank})"
                 lines.append(
-                    f"| {badge} | {m.gt_id}{dup_marker} | {m.gt_name} | {m.agent_name} "
-                    f"| {m.match_similarity:.2f} | {m.pair_score:.2f} "
+                    f"| {m.gt_id}{dup_marker} | {m.gt_name} | {m.agent_name} "
+                    f"| {m.match_similarity:.2f} | {badge} {m.pair_score:.2f} "
                     f"| {s['severity'].score:.2f} | {s['category'].score:.2f} "
                     f"| {s['security_concern'].score:.2f} "
                     f"| {s['code_location'].score:.2f} "

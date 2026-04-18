@@ -17,29 +17,23 @@ from grader.similarity import JudgeResult
 
 
 _VERDICT_MATCHED = "**MATCHED**"
-_VERDICT_ELIGIBLE_LOST = "eligible (lost)"
-_VERDICT_REJECTED_SCORE = "rejected (score)"
-_VERDICT_REJECTED_VERDICT = "rejected (verdict)"
+_VERDICT_ELIGIBLE_LOST = "eligible (lost to greedy)"
 _VERDICT_REJECTED = "rejected"
 
 
 def _classify(
     result: JudgeResult,
     matched_gt_id: str | None,
-    threshold: float,
+    threshold: int,
 ) -> str:
     """Assign a human-readable verdict to one candidate row."""
     if matched_gt_id == result.gt_id:
         return _VERDICT_MATCHED
-    score_ok = result.match_score >= threshold
-    verdict_ok = result.same_root_cause
-    if score_ok and verdict_ok:
-        # Cleared the AND gate but greedy assignment picked another pair.
+    if result.match_score >= threshold:
+        # Cleared the score gate but greedy assignment picked another pair
+        # (typically because another agent scored higher for this GT, or
+        # because this agent scored even higher on a different GT).
         return _VERDICT_ELIGIBLE_LOST
-    if verdict_ok and not score_ok:
-        return _VERDICT_REJECTED_SCORE
-    if score_ok and not verdict_ok:
-        return _VERDICT_REJECTED_VERDICT
     return _VERDICT_REJECTED
 
 
@@ -85,18 +79,17 @@ def _render_one_trace(
     lines.append("**Candidates considered (sorted by score, desc):**")
     lines.append("")
     lines.append(
-        "| GT ID | GT Name | Score | Same root cause | Verdict | Reasoning |"
+        "| GT ID | GT Name | Score (1-5) | Verdict | Reasoning |"
     )
     lines.append(
-        "|-------|---------|-------|-----------------|---------|-----------|"
+        "|-------|---------|-------------|---------|-----------|"
     )
     for r in sorted_candidates:
         verdict = _classify(r, trace.matched_gt_id, threshold)
         gt_name = _escape_table(_find_gt_name(r.gt_id, gt_name_by_id))
-        srh = "yes" if r.same_root_cause else "no"
         reasoning = _escape_table(r.reasoning or "(none)")
         lines.append(
-            f"| `{r.gt_id}` | {gt_name} | {r.match_score:.2f} | {srh} | "
+            f"| `{r.gt_id}` | {gt_name} | {r.match_score} | "
             f"{verdict} | {reasoning} |"
         )
     lines.append("")
@@ -184,7 +177,7 @@ def write_judge_trace(
                 lines.extend(
                     _render_one_trace(
                         trace,
-                        threshold=float(meta.get("threshold", 0.3)),
+                        threshold=int(meta.get("threshold", 4)),
                         gt_name_by_id=gt_name_by_id,
                     )
                 )

@@ -123,7 +123,8 @@ class TestGradePair:
         agent = _agent("Issue X", severity="Warning")
         pair = MatchedPair(agent=agent, gt=gt, similarity=0.8)
         grade = grade_pair(pair, sim)
-        assert grade.scores["severity"].score == 0.0
+        # Under-reporting Critical as Warning earns partial credit (0.3).
+        assert grade.scores["severity"].score == 0.3
 
     def test_code_location_scored(self, sim):
         gt = _gt("T-01", "Issue X", code=[CodeRef("file.rs", 10, 20)])

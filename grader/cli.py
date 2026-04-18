@@ -87,9 +87,10 @@ def main(argv: list[str] | None = None) -> None:
         help="Path to agent output JSON file",
     )
     parser.add_argument(
-        "--threshold", type=float, default=0.3,
-        help="Minimum match_score for a match (default: 0.3). "
-             "same_root_cause must also be True.",
+        "--threshold", type=int, default=4,
+        help="Minimum match_score (integer 1..5) for a match. Default 4. "
+             "The judge returns an ordinal score on a 1..5 scale; scores "
+             ">= threshold are treated as matches.",
     )
     parser.add_argument(
         "--weights", default=None,

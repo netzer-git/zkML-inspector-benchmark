@@ -57,11 +57,10 @@ def _agent(
     )
 
 
-def _responder_with_scores(score_map: dict[str, float], same_root_cause_map: dict[str, bool] | None = None):
+def _responder_with_scores(score_map: dict[str, int]):
     """Build a responder that scores each candidate id using score_map.
 
-    Extracts the candidate ids from the user prompt. If same_root_cause_map
-    is not provided, same_root_cause is True whenever the score is >= 0.7.
+    Scores are integers on the 1..5 scale; unmapped candidates default to 1.
     """
     def _responder(system, user, schema):
         ids = re.findall(r"^\[([^\]]+)\]", user, re.MULTILINE)
@@ -69,12 +68,7 @@ def _responder_with_scores(score_map: dict[str, float], same_root_cause_map: dic
             "judgments": [
                 {
                     "gt_id": cid,
-                    "match_score": score_map.get(cid, 0.0),
-                    "same_root_cause": (
-                        same_root_cause_map[cid]
-                        if same_root_cause_map and cid in same_root_cause_map
-                        else score_map.get(cid, 0.0) >= 0.7
-                    ),
+                    "match_score": score_map.get(cid, 1),
                     "reasoning": f"canned for {cid}",
                 }
                 for cid in ids
@@ -154,45 +148,45 @@ class TestMatchFindingsEmpty:
 
 class TestMatchFindingsLLM:
     def test_single_perfect_match(self):
-        provider = MockLLMProvider(_responder_with_scores({"T-01": 0.95}))
+        provider = MockLLMProvider(_responder_with_scores({"T-01": 5}))
         judge = LLMJudgeSimilarity(provider)
         result = match_findings(
-            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=0.3
+            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=4
         )
         assert len(result.matched) == 1
-        assert result.matched[0].similarity == 0.95
+        assert result.matched[0].similarity == 5
         assert len(provider.calls) == 1
 
     def test_one_call_per_agent_finding(self):
         provider = MockLLMProvider(_responder_with_scores(
-            {"T-01": 0.9, "T-02": 0.1}
+            {"T-01": 5, "T-02": 1}
         ))
         judge = LLMJudgeSimilarity(provider)
         match_findings(
             [_agent("a"), _agent("b"), _agent("c")],
             [_gt("T-01", "gt1"), _gt("T-02", "gt2")],
             judge,
-            threshold=0.3,
+            threshold=4,
         )
         assert len(provider.calls) == 3  # one per agent finding
 
     def test_greedy_both_agents_bind_to_best_gt_even_if_same(self):
-        """Under N:1 matching, both agents prefer T-01 → both bind to it.
+        """Under N:1 matching, both agents prefer T-01 -> both bind to it.
 
-        The responder gives T-01 score 0.95 for every agent and T-02 score
-        0.75. Agent 'alpha' processes first and takes T-01 as primary (dup_rank
+        The responder gives T-01 score 5 for every agent and T-02 score
+        4. Agent 'alpha' processes first and takes T-01 as primary (dup_rank
         0); agent 'beta' also picks T-01 as its best match, landing there as
         a duplicate (dup_rank 1). T-02 is unmatched.
         """
         provider = MockLLMProvider(_responder_with_scores(
-            {"T-01": 0.95, "T-02": 0.75}
+            {"T-01": 5, "T-02": 4}
         ))
         judge = LLMJudgeSimilarity(provider)
         result = match_findings(
             [_agent("alpha"), _agent("beta")],
             [_gt("T-01", "gt1"), _gt("T-02", "gt2")],
             judge,
-            threshold=0.3,
+            threshold=4,
         )
         assert len(result.matched) == 2
         # Both agents bind to T-01 (their highest-score GT).
@@ -201,7 +195,7 @@ class TestMatchFindingsLLM:
         # One is primary (dup_rank=0), one is duplicate (dup_rank=1).
         dup_ranks = sorted(m.dup_rank for m in result.matched)
         assert dup_ranks == [0, 1]
-        # T-02 was never matched → missed.
+        # T-02 was never matched -> missed.
         assert len(result.missed_gt) == 1
         assert result.missed_gt[0].issue_id == "T-02"
 
@@ -211,15 +205,14 @@ class TestMatchFindingsLLM:
             # First agent matches T-01; second agent matches nothing
             agent_line = user.split("AGENT FINDING:")[1].split("\n")[1]
             if agent_line.startswith("agent1"):
-                scores = {cid: (0.9 if cid == "T-01" else 0.1) for cid in ids}
+                scores = {cid: (5 if cid == "T-01" else 1) for cid in ids}
             else:
-                scores = {cid: 0.1 for cid in ids}
+                scores = {cid: 1 for cid in ids}
             return {
                 "judgments": [
                     {
                         "gt_id": cid,
                         "match_score": scores[cid],
-                        "same_root_cause": scores[cid] >= 0.7,
                         "reasoning": "",
                     }
                     for cid in ids
@@ -232,7 +225,7 @@ class TestMatchFindingsLLM:
             [_agent("agent1"), _agent("agent2")],
             [_gt("T-01", "first"), _gt("T-02", "second")],
             judge,
-            threshold=0.3,
+            threshold=4,
         )
         assert len(result.matched) == 1
         assert result.matched[0].gt.issue_id == "T-01"
@@ -270,15 +263,14 @@ class TestJudgeTextContent:
             ids = re.findall(r"^\[([^\]]+)\]", user, re.MULTILINE)
             return {
                 "judgments": [
-                    {"gt_id": cid, "match_score": 0.0,
-                     "same_root_cause": False, "reasoning": ""}
+                    {"gt_id": cid, "match_score": 1, "reasoning": ""}
                     for cid in ids
                 ]
             }
 
         provider = MockLLMProvider(responder)
         judge = LLMJudgeSimilarity(provider)
-        match_findings(agent_list, gt_list, judge, threshold=0.3)
+        match_findings(agent_list, gt_list, judge, threshold=4)
         return captured[0] if captured else ""
 
     def test_paper_reference_included(self):
@@ -318,65 +310,65 @@ class TestJudgeTextContent:
 
 
 # ---------------------------------------------------------------------------
-# AND gate behavior
+# Score-threshold gate behavior (1..5 ordinal)
 # ---------------------------------------------------------------------------
 
-class TestAndGate:
-    def test_high_score_but_not_same_root_cause_does_not_match(self):
+class TestScoreThreshold:
+    def test_score_below_threshold_does_not_match(self):
         provider = MockLLMProvider(lambda s, u, sc: {
             "judgments": [
-                {"gt_id": "T-01", "match_score": 0.95,
-                 "same_root_cause": False, "reasoning": "keyword overlap only"}
+                {"gt_id": "T-01", "match_score": 3,
+                 "reasoning": "related sub-issue but not the same finding"}
             ]
         })
         judge = LLMJudgeSimilarity(provider)
         result = match_findings(
-            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=0.3,
+            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=4,
         )
         assert result.matched == []
         assert len(result.missed_gt) == 1
         assert len(result.extra_agent) == 1
 
-    def test_same_root_cause_but_below_threshold_does_not_match(self):
+    def test_score_at_threshold_matches(self):
         provider = MockLLMProvider(lambda s, u, sc: {
             "judgments": [
-                {"gt_id": "T-01", "match_score": 0.2,
-                 "same_root_cause": True, "reasoning": "weak textual overlap"}
+                {"gt_id": "T-01", "match_score": 4,
+                 "reasoning": "very likely the same finding"}
             ]
         })
         judge = LLMJudgeSimilarity(provider)
         result = match_findings(
-            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=0.3,
+            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=4,
+        )
+        assert len(result.matched) == 1
+        assert result.matched[0].similarity == 4
+
+    def test_score_above_threshold_matches(self):
+        provider = MockLLMProvider(lambda s, u, sc: {
+            "judgments": [
+                {"gt_id": "T-01", "match_score": 5,
+                 "reasoning": "same root cause"}
+            ]
+        })
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings(
+            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=4,
+        )
+        assert len(result.matched) == 1
+        assert result.matched[0].similarity == 5
+
+    def test_custom_higher_threshold(self):
+        """threshold=5 only accepts the top of the scale."""
+        provider = MockLLMProvider(lambda s, u, sc: {
+            "judgments": [
+                {"gt_id": "T-01", "match_score": 4, "reasoning": ""}
+            ]
+        })
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings(
+            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=5,
         )
         assert result.matched == []
-
-    def test_both_conditions_satisfied_produces_match(self):
-        provider = MockLLMProvider(lambda s, u, sc: {
-            "judgments": [
-                {"gt_id": "T-01", "match_score": 0.8,
-                 "same_root_cause": True, "reasoning": "same root cause"}
-            ]
-        })
-        judge = LLMJudgeSimilarity(provider)
-        result = match_findings(
-            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=0.3,
-        )
-        assert len(result.matched) == 1
-        assert result.matched[0].similarity == 0.8
-
-    def test_threshold_boundary(self):
-        """Score exactly at threshold counts (>=)."""
-        provider = MockLLMProvider(lambda s, u, sc: {
-            "judgments": [
-                {"gt_id": "T-01", "match_score": 0.3,
-                 "same_root_cause": True, "reasoning": ""}
-            ]
-        })
-        judge = LLMJudgeSimilarity(provider)
-        result = match_findings(
-            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=0.3,
-        )
-        assert len(result.matched) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -390,10 +382,8 @@ class TestCandidateIds:
         def responder(system, user, schema):
             captured.append(user)
             return {"judgments": [
-                {"gt_id": "alpha-42", "match_score": 0.1,
-                 "same_root_cause": False, "reasoning": ""},
-                {"gt_id": "alpha-43", "match_score": 0.1,
-                 "same_root_cause": False, "reasoning": ""},
+                {"gt_id": "alpha-42", "match_score": 1, "reasoning": ""},
+                {"gt_id": "alpha-43", "match_score": 1, "reasoning": ""},
             ]}
 
         provider = MockLLMProvider(responder)
@@ -402,7 +392,7 @@ class TestCandidateIds:
             [_agent("ag")],
             [_gt("alpha-42", "first"), _gt("alpha-43", "second")],
             judge,
-            threshold=0.3,
+            threshold=4,
         )
         assert "[alpha-42]" in captured[0]
         assert "[alpha-43]" in captured[0]
@@ -411,15 +401,13 @@ class TestCandidateIds:
         """Defensive: if the LLM returns an id we didn't send, ignore it."""
         provider = MockLLMProvider(lambda s, u, sc: {
             "judgments": [
-                {"gt_id": "alpha-01", "match_score": 0.9,
-                 "same_root_cause": True, "reasoning": ""},
-                {"gt_id": "fictional-id", "match_score": 0.99,
-                 "same_root_cause": True, "reasoning": ""},
+                {"gt_id": "alpha-01", "match_score": 5, "reasoning": ""},
+                {"gt_id": "fictional-id", "match_score": 5, "reasoning": ""},
             ]
         })
         judge = LLMJudgeSimilarity(provider)
         result = match_findings(
-            [_agent("ag")], [_gt("alpha-01", "gt")], judge, threshold=0.3,
+            [_agent("ag")], [_gt("alpha-01", "gt")], judge, threshold=4,
         )
         assert len(result.matched) == 1
         assert result.matched[0].gt.issue_id == "alpha-01"
@@ -467,12 +455,12 @@ class TestMatchResultExtras:
 class TestTraces:
     def test_trace_one_entry_per_agent_finding_in_order(self):
         provider = MockLLMProvider(_responder_with_scores(
-            {"T-01": 0.9, "T-02": 0.1}
+            {"T-01": 5, "T-02": 1}
         ))
         judge = LLMJudgeSimilarity(provider)
         agent = [_agent("a1"), _agent("a2"), _agent("a3")]
         gt = [_gt("T-01", "g1"), _gt("T-02", "g2")]
-        result = match_findings(agent, gt, judge, threshold=0.3)
+        result = match_findings(agent, gt, judge, threshold=4)
         assert len(result.traces) == 3
         for i, tr in enumerate(result.traces):
             assert tr.agent_index == i
@@ -480,70 +468,56 @@ class TestTraces:
 
     def test_trace_candidates_cover_all_gt(self):
         provider = MockLLMProvider(_responder_with_scores(
-            {"T-01": 0.9, "T-02": 0.5, "T-03": 0.1}
+            {"T-01": 5, "T-02": 3, "T-03": 1}
         ))
         judge = LLMJudgeSimilarity(provider)
         agent = [_agent("a1")]
         gt = [_gt("T-01", "g1"), _gt("T-02", "g2"), _gt("T-03", "g3")]
-        result = match_findings(agent, gt, judge, threshold=0.3)
+        result = match_findings(agent, gt, judge, threshold=4)
         assert len(result.traces) == 1
         cand_ids = {r.gt_id for r in result.traces[0].candidates}
         assert cand_ids == {"T-01", "T-02", "T-03"}
 
     def test_trace_matched_gt_id_set_when_pair_matched(self):
         provider = MockLLMProvider(_responder_with_scores(
-            {"T-01": 0.9}
+            {"T-01": 5}
         ))
         judge = LLMJudgeSimilarity(provider)
         agent = [_agent("a1")]
         gt = [_gt("T-01", "g1")]
-        result = match_findings(agent, gt, judge, threshold=0.3)
+        result = match_findings(agent, gt, judge, threshold=4)
         assert result.traces[0].matched_gt_id == "T-01"
 
-    def test_trace_matched_gt_id_none_when_no_match(self):
+    def test_trace_matched_gt_id_none_when_below_threshold(self):
         provider = MockLLMProvider(_responder_with_scores(
-            {"T-01": 0.1}  # below threshold AND same_root_cause=False
+            {"T-01": 2}
         ))
         judge = LLMJudgeSimilarity(provider)
         agent = [_agent("a1")]
         gt = [_gt("T-01", "g1")]
-        result = match_findings(agent, gt, judge, threshold=0.3)
-        assert result.traces[0].matched_gt_id is None
-
-    def test_trace_matched_gt_id_none_when_blocked_by_and_gate(self):
-        """Score high but same_root_cause=False → no match, no matched_gt_id."""
-        provider = MockLLMProvider(lambda s, u, sc: {
-            "judgments": [
-                {"gt_id": "T-01", "match_score": 0.95,
-                 "same_root_cause": False, "reasoning": "keywords only"}
-            ]
-        })
-        judge = LLMJudgeSimilarity(provider)
-        result = match_findings(
-            [_agent("a1")], [_gt("T-01", "g1")], judge, threshold=0.3,
-        )
+        result = match_findings(agent, gt, judge, threshold=4)
         assert result.traces[0].matched_gt_id is None
 
     def test_empty_agent_produces_no_traces(self):
         provider = MockLLMProvider([])
         judge = LLMJudgeSimilarity(provider)
-        result = match_findings([], [_gt("T-01", "g1")], judge, threshold=0.3)
+        result = match_findings([], [_gt("T-01", "g1")], judge, threshold=4)
         assert result.traces == []
 
     def test_empty_gt_produces_no_traces(self):
         provider = MockLLMProvider([])
         judge = LLMJudgeSimilarity(provider)
-        result = match_findings([_agent("a1")], [], judge, threshold=0.3)
+        result = match_findings([_agent("a1")], [], judge, threshold=4)
         assert result.traces == []
 
     def test_agent_text_captured_in_trace(self):
         """Trace stores the exact text shown to the judge (includes paper ref)."""
-        provider = MockLLMProvider(_responder_with_scores({"T-01": 0.9}))
+        provider = MockLLMProvider(_responder_with_scores({"T-01": 5}))
         judge = LLMJudgeSimilarity(provider)
         agent = [_agent("named thing", explanation="body",
                         paper="Section 3: quoted claim")]
         gt = [_gt("T-01", "g1")]
-        result = match_findings(agent, gt, judge, threshold=0.3)
+        result = match_findings(agent, gt, judge, threshold=4)
         text = result.traces[0].agent_text
         assert "named thing" in text
         assert "body" in text

@@ -82,23 +82,23 @@ def match_findings(
     agent_findings: list[AgentFinding],
     gt_findings: list[GroundTruthFinding],
     backend: LLMJudgeSimilarity,
-    threshold: float = 0.3,
+    threshold: int = 4,
     verbose: bool = False,
 ) -> MatchResult:
     """Match agent findings to GT findings using the LLM judge.
 
     Issues one bulk LLM call per agent finding, ranking against all GT
-    findings in the project. Matching requires BOTH numeric confidence
-    (match_score >= threshold) AND the judge's semantic verdict
-    (same_root_cause == True). After per-pair scoring, greedy 1:1 assignment
-    resolves conflicts in favor of higher-scored pairs.
+    findings in the project. The judge returns an integer match_score on
+    a 1..5 scale (see grader.similarity._DEFAULT_SYSTEM_PROMPT). A pair
+    clears the gate when match_score >= threshold (default 4 = "very likely
+    the same finding"). After per-pair scoring, greedy assignment gives each
+    agent its best GT; multiple agents can bind to the same GT (N:1).
 
     Args:
         agent_findings: Agent findings for one project, in arbitrary order.
         gt_findings: GT findings for the same project.
         backend: An LLMJudgeSimilarity instance (must expose judge_bulk).
-        threshold: Minimum match_score to consider a match (applied in AND
-            with same_root_cause).
+        threshold: Minimum match_score (integer 1..5) for a match. Default 4.
         verbose: If True, print a progress line per agent finding to stdout.
             Useful for long-running real-API runs; tests leave it off.
 
@@ -144,7 +144,7 @@ def match_findings(
     id_to_j = {gf.issue_id: j for j, gf in enumerate(gt_findings)}
 
     traces: list[AgentFindingTrace] = []
-    triples: list[tuple[float, int, int]] = []
+    triples: list[tuple[int, int, int]] = []
     for i in range(m):
         if verbose:
             name_preview = (agent_findings[i].issue_name or "")[:60]
@@ -168,8 +168,8 @@ def match_findings(
         if verbose:
             if best is not None:
                 print(
-                    f" -> top {best.match_score:.2f} / {best.gt_id!r} "
-                    f"(same_root_cause={best.same_root_cause}) [{elapsed:.1f}s]",
+                    f" -> top {best.match_score}/5 / {best.gt_id!r} "
+                    f"[{elapsed:.1f}s]",
                     flush=True,
                 )
             else:
@@ -178,8 +178,11 @@ def match_findings(
             j = id_to_j.get(r.gt_id)
             if j is None:
                 continue  # defensive: judge returned an id we didn't send
-            # AND gate: both numeric confidence and semantic verdict required
-            if r.match_score >= threshold and r.same_root_cause:
+            # Pair clears the gate when the judge's ordinal score is at or
+            # above threshold. Default threshold=4 means "very likely same
+            # finding" or "confident match". No boolean gate any more --
+            # the ordinal encodes confidence directly.
+            if r.match_score >= threshold:
                 triples.append((r.match_score, i, j))
 
     # Assignment: sort triples by score desc and assign greedily.

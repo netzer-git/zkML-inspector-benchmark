@@ -29,15 +29,15 @@ _SEVERITY_RANK = {"Critical": 2, "Warning": 1, "Info": 0}
 _SEVERITY_MATRIX = {
     # Agent=Critical
     (2, 2): 1.0,   # Critical vs Critical
-    (2, 1): 0.25,  # Critical vs Warning (over-report by 1)
+    (2, 1): 0.3,  # Critical vs Warning (over-report by 1)
     (2, 0): 0.1,   # Critical vs Info (over-report by 2)
     # Agent=Warning
-    (1, 2): 0.0,   # Warning vs Critical (under-report)
+    (1, 2): 0.3,   # Warning vs Critical (under-report)
     (1, 1): 1.0,   # Warning vs Warning
-    (1, 0): 0.25,  # Warning vs Info (over-report by 1)
+    (1, 0): 0.5,  # Warning vs Info (over-report by 1)
     # Agent=Info
     (0, 2): 0.0,   # Info vs Critical (under-report)
-    (0, 1): 0.0,   # Info vs Warning (under-report)
+    (0, 1): 0.5,   # Info vs Warning (under-report)
     (0, 0): 1.0,   # Info vs Info
 }
 
