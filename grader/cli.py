@@ -103,22 +103,39 @@ def main(argv: list[str] | None = None) -> None:
     agent = load_agent_output(args.agent_output)
     print(f"  {sum(len(v) for v in agent.values())} findings across {len(agent)} projects")
 
-    # Grade each project
+    # Grade each project. Projects with no GT counterpart are skipped.
+    # Projects that raise during matching/grading are isolated — logged,
+    # recorded in report meta, and the rest of the run continues.
     all_projects = set(gt.keys()) | set(agent.keys())
-    project_grades = {}
+    project_grades: dict = {}
+    skipped_projects: list[str] = []
+    failed_projects: list[dict[str, str]] = []
 
     for project in sorted(all_projects):
         gt_findings = gt.get(project, [])
         agent_findings = agent.get(project, [])
 
         if not gt_findings:
+            skipped_projects.append(project)
             print(f"  {project}: no ground truth available, skipping")
             continue
 
-        match_result = match_findings(agent_findings, gt_findings, backend, args.threshold)
-        pg = grade_project(
-            project, match_result, backend, gt_findings, agent_findings, weights
-        )
+        try:
+            match_result = match_findings(
+                agent_findings, gt_findings, backend, args.threshold
+            )
+            pg = grade_project(
+                project, match_result, backend, gt_findings, agent_findings, weights
+            )
+        except Exception as e:
+            failed_projects.append({
+                "project": project,
+                "error_type": type(e).__name__,
+                "error": str(e)[:300],
+            })
+            print(f"  {project}: FAILED ({type(e).__name__}: {e}); skipping")
+            continue
+
         project_grades[project] = pg
 
         n_matched = len(pg.matches)
@@ -134,12 +151,19 @@ def main(argv: list[str] | None = None) -> None:
         )
 
     # Build report (backend is fixed now — "llm-judge")
-    report = build_report(project_grades, args.threshold, weights, "llm-judge")
+    report = build_report(
+        project_grades, args.threshold, weights, "llm-judge",
+        skipped_projects=skipped_projects, failed_projects=failed_projects,
+    )
 
     o = report.overall
     print(f"\nOverall: benchmark_score={o['benchmark_score']:.4f}, "
           f"recall={o['recall']:.4f}, precision={o['precision']:.4f}, "
           f"f1={o['f1']:.4f}, quality={o['quality']:.4f}")
+    if failed_projects:
+        print(f"NOTE: {len(failed_projects)} project(s) failed and are excluded "
+              f"from the scores above: "
+              f"{', '.join(f['project'] for f in failed_projects)}")
 
     if args.output:
         write_json_report(report, args.output)

@@ -272,3 +272,130 @@ class TestHelpText:
             main(["--help"])
         out = capsys.readouterr().out
         assert ".env" in out
+
+
+# ---------------------------------------------------------------------------
+# Per-project error isolation
+# ---------------------------------------------------------------------------
+
+class TestPerProjectErrorIsolation:
+    """A single-project API failure must not halt the entire grading run."""
+
+    def test_one_project_fails_others_complete(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        """Mock provider: succeed on 'alpha', fail on 'beta'.
+
+        Verifies:
+        - Run completes (no exception bubbles to caller).
+        - alpha is scored and appears in the report.
+        - beta is absent from project_grades but recorded in meta.failed_projects.
+        """
+        def responder(system, user, schema):
+            ids = re.findall(r"^\[([^\]]+)\]", user, re.MULTILINE)
+            # Candidate IDs start with the project prefix; detect which
+            # project this call is for by looking at the first id.
+            if ids and ids[0].startswith("beta"):
+                raise RuntimeError("simulated API failure for beta")
+            return {
+                "judgments": [
+                    {"gt_id": cid, "match_score": 0.9,
+                     "same_root_cause": True, "reasoning": "canned"}
+                    for cid in ids
+                ]
+            }
+
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(responder)
+        out_json = str(tmp_path / "report.json")
+
+        # Must not raise
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--output", out_json,
+        ])
+
+        data = json.loads(Path(out_json).read_text(encoding="utf-8"))
+        assert "alpha" in data["projects"]
+        assert "beta" not in data["projects"]
+
+        failed = data["meta"]["failed_projects"]
+        assert len(failed) == 1
+        assert failed[0]["project"] == "beta"
+        assert failed[0]["error_type"] == "RuntimeError"
+        assert "simulated API failure" in failed[0]["error"]
+
+    def test_failures_in_markdown_output(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        """The failed projects section appears in the markdown report."""
+        def responder(system, user, schema):
+            ids = re.findall(r"^\[([^\]]+)\]", user, re.MULTILINE)
+            if ids and ids[0].startswith("beta"):
+                raise RuntimeError("boom")
+            return {"judgments": [
+                {"gt_id": cid, "match_score": 0.9,
+                 "same_root_cause": True, "reasoning": ""}
+                for cid in ids
+            ]}
+
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(responder)
+        out_md = str(tmp_path / "report.md")
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--output-md", out_md,
+        ])
+        content = Path(out_md).read_text(encoding="utf-8")
+        assert "Skipped / failed projects" in content
+        assert "Failed during grading" in content
+        assert "beta" in content
+        assert "RuntimeError" in content
+
+    def test_all_projects_fail_still_produces_report(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        """If every project fails, we still get a (zero-scored) report."""
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
+            lambda s, u, sc: (_ for _ in ()).throw(RuntimeError("all broken"))
+        )
+        out_json = str(tmp_path / "report.json")
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--output", out_json,
+        ])
+        data = json.loads(Path(out_json).read_text(encoding="utf-8"))
+        assert data["projects"] == {}
+        assert len(data["meta"]["failed_projects"]) == 2  # alpha + beta
+        assert data["overall"]["total_matched"] == 0
+
+    def test_skipped_projects_recorded_in_meta(
+        self, tmp_path, fictional_xlsx_path, reset_override,
+    ):
+        """Agent findings for projects not in GT land in skipped_projects."""
+        # Agent has a finding for a project the GT xlsx doesn't contain
+        agent_path = tmp_path / "agent.json"
+        agent_path.write_text(json.dumps([{
+            "entry-id": "gamma",  # not in fictional GT
+            "issue-name": "Foo",
+            "issue-explanation": "Bar",
+            "severity": "Warning",
+            "category": "Other",
+            "security-concern": "Other",
+            "relevant-code": "",
+            "paper-reference": "-",
+        }]))
+
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(_bulk_responder({}))
+        out_json = str(tmp_path / "report.json")
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(agent_path),
+            "--output", out_json,
+        ])
+        data = json.loads(Path(out_json).read_text(encoding="utf-8"))
+        assert "gamma" in data["meta"]["skipped_projects"]

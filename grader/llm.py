@@ -1,8 +1,8 @@
 """LLM provider abstraction for the llm-judge similarity backend.
 
 Supports OpenAI and Anthropic with env-driven configuration. The SDKs are
-imported lazily inside each provider so `pip install .` without extras still
-works for all non-LLM paths (Jaccard, existing tests).
+imported lazily inside each provider so a missing SDK only fails when that
+provider is actually selected.
 """
 
 from __future__ import annotations

@@ -198,14 +198,30 @@ def build_report(
     threshold: float,
     weights: dict[str, float],
     backend_name: str,
+    skipped_projects: list[str] | None = None,
+    failed_projects: list[dict[str, str]] | None = None,
 ) -> GradeReport:
-    """Build the full grading report across all projects."""
+    """Build the full grading report across all projects.
+
+    Args:
+        project_grades: Successfully graded projects.
+        threshold: Match threshold used.
+        weights: Field weights used.
+        backend_name: Label for the similarity backend.
+        skipped_projects: Agent project keys that had no GT counterpart and
+            were therefore skipped. Recorded in meta for transparency.
+        failed_projects: Projects where matching/grading raised an exception.
+            Each entry is ``{"project", "error_type", "error"}``. Recorded in
+            meta so the user can see which projects didn't get a score.
+    """
     meta = {
         "grader_version": grader.__version__,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "match_threshold": threshold,
         "weights": weights,
         "similarity_backend": backend_name,
+        "skipped_projects": list(skipped_projects or []),
+        "failed_projects": list(failed_projects or []),
     }
 
     # Overall metrics
@@ -329,6 +345,26 @@ def write_markdown_report(report: GradeReport, path: str) -> None:
         extra_str = ", ".join(f"{s}: {c}" for s, c in sorted(extra_sev.items()))
         lines.append(f"| Extra by Severity | {extra_str} |")
     lines.append("")
+
+    skipped = report.meta.get("skipped_projects") or []
+    failed = report.meta.get("failed_projects") or []
+    if skipped or failed:
+        lines.append("## Skipped / failed projects\n")
+        if skipped:
+            lines.append("**Skipped (no ground truth available):** "
+                         + ", ".join(sorted(skipped)))
+            lines.append("")
+        if failed:
+            lines.append("**Failed during grading:**")
+            lines.append("")
+            lines.append("| Project | Error type | Error |")
+            lines.append("|---------|------------|-------|")
+            for f in failed:
+                err_text = str(f.get("error", "")).replace("|", "\\|")
+                lines.append(
+                    f"| {f.get('project', '')} | {f.get('error_type', '')} | {err_text} |"
+                )
+            lines.append("")
 
     for name, pg in sorted(report.projects.items()):
         lines.append(f"## {name}\n")

@@ -30,6 +30,7 @@ zkML-inspector-benchmark/
      }
    ]
    ```
+   (Agents produce 8 fields. `issue-id` is a ground-truth-only label used by the dataset for cross-referencing.)
 4. **Grade.** Run `grader/` against the ground-truth xlsx and the agent JSON to get per-project and overall scores.
 
 ## Components
@@ -73,7 +74,7 @@ Each finding in the ground-truth xlsx has these columns:
 | Column | Type | Notes |
 |--------|------|-------|
 | entry-id | str | Project identifier (e.g. `zkLLM`) |
-| issue-id | str | `<entry-id>-NN` |
+| issue-id | str | `<entry-id>-NN` — GT-only; agents do not produce this. |
 | issue-name | str | 3-7 words |
 | issue-explanation | str | One paragraph |
 | severity | enum | `Critical` / `Warning` / `Info` |

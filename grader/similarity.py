@@ -1,9 +1,9 @@
 """Similarity interface and LLM-as-judge backend used by the grader.
 
-The matcher is built around the LLM judge (see LLMJudgeSimilarity). The
-SimilarityBackend ABC is kept minimal so future backends (TF-IDF, embeddings)
-can plug into the single-pair `score()` path used by the paper-reference
-quote scorer.
+Production matching uses LLMJudgeSimilarity. The SimilarityBackend ABC
+is kept minimal so a single-pair similarity score can be computed for
+paper-reference quote matching without forcing it through the LLM when
+a cheaper path makes sense in tests.
 """
 
 from __future__ import annotations
@@ -151,14 +151,10 @@ def _parse_judge_response(
 class LLMJudgeSimilarity(SimilarityBackend):
     """LLM-as-judge similarity backend.
 
-    The primary entry point is `judge_bulk(agent_text, candidates)`, which
-    issues exactly one LLM call to rank an agent finding against all candidate
-    GT findings. The matcher detects `judge_bulk` via getattr and prefers it
-    over the per-pair `score()` loop.
-
-    `score()` is implemented as a degenerate single-candidate bulk call so this
-    class stays drop-in compatible with callers that expect the plain
-    SimilarityBackend contract (e.g., paper-reference quote matching).
+    Primary entry point is `judge_bulk(agent_text, candidates)` — one LLM
+    call ranks an agent finding against all candidate GTs. The matcher
+    requires this method. `score(a, b)` is a degenerate single-candidate
+    variant kept for paper-reference quote matching callers.
     """
 
     def __init__(self, provider: LLMProvider, system_prompt: str | None = None):

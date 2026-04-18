@@ -18,11 +18,10 @@ from grader.similarity import SimilarityBackend
 
 
 class WordOverlapSimilarity(SimilarityBackend):
-    """Deterministic word-overlap (Jaccard) similarity for tests only.
+    """Deterministic word-overlap similarity — tests only.
 
-    Lives in conftest (not production) because scorer tests need a predictable,
-    offline similarity for the paper-reference quote sub-score. Production code
-    always uses LLMJudgeSimilarity.
+    Used by `score_paper_reference` tests to get an offline, predictable
+    quote-sub-score. Production uses LLMJudgeSimilarity.
     """
 
     def score(self, text_a: str, text_b: str) -> float:

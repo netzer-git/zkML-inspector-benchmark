@@ -24,9 +24,6 @@ dependencies = [
 dev = [
     "pytest>=7.0",
 ]
-# Reserved for future alternate similarity backends.
-similarity-tfidf = ["scikit-learn>=1.0"]
-similarity-embedding = ["sentence-transformers>=2.0"]
 
 [project.scripts]
 zkml-grader = "grader.cli:main"

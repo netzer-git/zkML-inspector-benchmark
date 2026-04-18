@@ -292,6 +292,28 @@ class TestBuildReport:
         assert extra["Warning"] == 1
         assert extra["Info"] == 3
 
+    def test_meta_defaults_empty_failed_and_skipped(self):
+        """When build_report is called without the optional lists, meta has
+        skipped_projects=[] and failed_projects=[]."""
+        report = build_report(
+            {}, threshold=0.3, weights=DEFAULT_WEIGHTS, backend_name="llm-judge",
+        )
+        assert report.meta["skipped_projects"] == []
+        assert report.meta["failed_projects"] == []
+
+    def test_meta_records_failed_and_skipped_projects(self):
+        report = build_report(
+            {}, threshold=0.3, weights=DEFAULT_WEIGHTS, backend_name="llm-judge",
+            skipped_projects=["unknown_project"],
+            failed_projects=[
+                {"project": "broken", "error_type": "RuntimeError", "error": "boom"},
+            ],
+        )
+        assert report.meta["skipped_projects"] == ["unknown_project"]
+        assert len(report.meta["failed_projects"]) == 1
+        assert report.meta["failed_projects"][0]["project"] == "broken"
+        assert report.meta["failed_projects"][0]["error_type"] == "RuntimeError"
+
 
 # ---------------------------------------------------------------------------
 # Output writers
