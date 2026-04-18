@@ -62,8 +62,8 @@ class TestMatchFindings:
         assert result.missed_gt == []
 
     def test_perfect_match(self, sim):
-        gt = [_gt("T-01", "Empty ReLU proof", "zkReLU prove has empty function body")]
-        agent = [_agent("Empty ReLU proof", "zkReLU prove has empty function body")]
+        gt = [_gt("T-01", "Unchecked widget output", "widget output has no range constraint")]
+        agent = [_agent("Unchecked widget output", "widget output has no range constraint")]
         result = match_findings(agent, gt, sim, threshold=0.3)
         assert len(result.matched) == 1
         assert result.matched[0].similarity == 1.0
@@ -71,19 +71,19 @@ class TestMatchFindings:
         assert result.extra_agent == []
 
     def test_similar_match(self, sim):
-        gt = [_gt("T-01", "Unconstrained RMSNorm Inverse",
-                   "RMSNorm inverse is computed externally and injected as unconstrained witness")]
-        agent = [_agent("Unconstrained RMSNorm witness",
-                        "The inverse RMS value is computed externally as unconstrained witness")]
+        gt = [_gt("T-01", "Static prover seed",
+                   "Witness generation uses a compile-time constant seed for the PRNG")]
+        agent = [_agent("Prover seed is static",
+                        "The witness PRNG is seeded at compile time with a constant value")]
         result = match_findings(agent, gt, sim, threshold=0.2)
         assert len(result.matched) == 1
         assert result.matched[0].similarity > 0.2
 
     def test_no_match_below_threshold(self, sim):
-        gt = [_gt("T-01", "Completely unrelated issue alpha",
-                   "The alpha protocol has a fundamental flaw")]
-        agent = [_agent("Different topic beta",
-                        "The beta mechanism is broken in a novel way")]
+        gt = [_gt("T-01", "Completely unrelated topic one",
+                   "The one protocol has a fundamental flaw")]
+        agent = [_agent("Different subject two",
+                        "The two mechanism is broken in a novel way")]
         result = match_findings(agent, gt, sim, threshold=0.5)
         assert result.matched == []
         assert len(result.missed_gt) == 1
@@ -91,12 +91,12 @@ class TestMatchFindings:
 
     def test_multiple_matches_greedy(self, sim):
         gt = [
-            _gt("T-01", "Empty ReLU proof", "ReLU prove function empty body"),
-            _gt("T-02", "No Fiat-Shamir transcript", "Challenges use PRNG no transcript"),
+            _gt("T-01", "Missing gadget range check", "widget gadget skips range validation"),
+            _gt("T-02", "Transcript missing public input", "public inputs not hashed into transcript"),
         ]
         agent = [
-            _agent("No Fiat-Shamir transform", "All challenges PRNG based no hash transcript"),
-            _agent("Empty ReLU proof body", "The ReLU prove function has completely empty body"),
+            _agent("Transcript omits public input", "public inputs are not added to the transcript hash"),
+            _agent("Gadget range check absent", "the widget gadget does not validate ranges"),
         ]
         result = match_findings(agent, gt, sim, threshold=0.2)
         assert len(result.matched) == 2

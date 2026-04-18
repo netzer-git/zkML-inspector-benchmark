@@ -46,9 +46,13 @@ class TestJaccardSimilarity:
         assert sim.score("the quick brown fox", "alpha beta gamma delta") == 0.0
 
     def test_partial_overlap(self, sim):
-        score = sim.score("unconstrained RMSNorm inverse", "RMSNorm witness unconstrained")
-        # Overlap: {unconstrained, rmsnorm} out of union: {unconstrained, rmsnorm, inverse, witness}
-        assert 0.4 <= score <= 0.6
+        score = sim.score("unchecked widget output", "widget output unchecked")
+        # Overlap: {unchecked, widget, output} out of union: {unchecked, widget, output}
+        assert score == 1.0  # fully identical token sets, different order
+        score = sim.score("unchecked widget output", "widget output missing bound")
+        # {unchecked,widget,output} ∩ {widget,output,missing,bound} = {widget,output} = 2
+        # union = 5 -> 0.4
+        assert 0.3 <= score <= 0.5
 
     def test_empty_first(self, sim):
         assert sim.score("", "hello world") == 0.0
@@ -66,8 +70,8 @@ class TestJaccardSimilarity:
         assert sim.score("commitment", "soundness") == 0.0
 
     def test_symmetry(self, sim):
-        a = "Fiat-Shamir transcript missing"
-        b = "No transcript for Fiat-Shamir transform"
+        a = "transcript missing widget"
+        b = "No transcript for the widget"
         assert sim.score(a, b) == sim.score(b, a)
 
     def test_superset_not_perfect(self, sim):
@@ -77,7 +81,7 @@ class TestJaccardSimilarity:
 
     def test_score_range(self, sim):
         score = sim.score(
-            "The lookup table T is never committed",
-            "Missing commitment on lookup table entries",
+            "The first gadget never validates its input",
+            "Missing validation on the first gadget input",
         )
         assert 0.0 <= score <= 1.0

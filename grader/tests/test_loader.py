@@ -1,7 +1,10 @@
-"""Tests for grader.loader module."""
+"""Tests for grader.loader module.
+
+All strings and project names below are synthetic placeholders; none of them
+reflect entries in the real benchmark dataset.
+"""
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -22,18 +25,18 @@ from grader.loader import (
 
 class TestParseCodeRefs:
     def test_single_ref_with_range(self):
-        refs = parse_code_refs("rmsnorm.cu:21-31")
-        assert refs == [CodeRef("rmsnorm.cu", 21, 31)]
+        refs = parse_code_refs("widget.rs:21-31")
+        assert refs == [CodeRef("widget.rs", 21, 31)]
 
     def test_single_ref_single_line(self):
-        refs = parse_code_refs("verifier.cpp:658")
-        assert refs == [CodeRef("verifier.cpp", 658, 658)]
+        refs = parse_code_refs("gadget.cpp:658")
+        assert refs == [CodeRef("gadget.cpp", 658, 658)]
 
     def test_multiple_comma_separated(self):
-        refs = parse_code_refs("rmsnorm.cu:21-31, llama-rmsnorm.py:34-38")
+        refs = parse_code_refs("widget.rs:21-31, helper.py:34-38")
         assert len(refs) == 2
-        assert refs[0] == CodeRef("rmsnorm.cu", 21, 31)
-        assert refs[1] == CodeRef("llama-rmsnorm.py", 34, 38)
+        assert refs[0] == CodeRef("widget.rs", 21, 31)
+        assert refs[1] == CodeRef("helper.py", 34, 38)
 
     def test_file_without_lines(self):
         refs = parse_code_refs("config.yaml")
@@ -46,8 +49,8 @@ class TestParseCodeRefs:
         assert refs[1] == CodeRef("config.rs", 31, 31)
 
     def test_path_with_directories(self):
-        refs = parse_code_refs("src/util/verifier.rs:36-42")
-        assert refs == [CodeRef("src/util/verifier.rs", 36, 42)]
+        refs = parse_code_refs("src/util/widget.rs:36-42")
+        assert refs == [CodeRef("src/util/widget.rs", 36, 42)]
 
     def test_none_returns_empty(self):
         assert parse_code_refs(None) == []
@@ -62,9 +65,9 @@ class TestParseCodeRefs:
         assert parse_code_refs("None") == []
 
     def test_unicode_dash_in_range(self):
-        # The xlsx uses en-dash (–) in some ranges
-        refs = parse_code_refs("tlookup.cu:267–370")
-        assert refs == [CodeRef("tlookup.cu", 267, 370)]
+        # Real xlsx files sometimes use en-dash (–) in ranges
+        refs = parse_code_refs("widget.rs:267–370")
+        assert refs == [CodeRef("widget.rs", 267, 370)]
 
     def test_semicolon_separator(self):
         refs = parse_code_refs("file1.rs:10; file2.rs:20")
@@ -72,29 +75,24 @@ class TestParseCodeRefs:
 
 
 # ---------------------------------------------------------------------------
-# load_ground_truth (real xlsx)
+# load_ground_truth (uses synthetic xlsx fixture from conftest.py)
 # ---------------------------------------------------------------------------
 
-XLSX_PATH = Path(__file__).parent.parent.parent / "zkMLDataset.xlsx"
-
-
-@pytest.mark.skipif(not XLSX_PATH.exists(), reason="xlsx not found")
 class TestLoadGroundTruth:
-    def test_loads_all_projects(self):
-        gt = load_ground_truth(XLSX_PATH)
-        assert "zkllm" in gt
-        assert "zkgpt" in gt
-        assert "zkml" in gt
-        assert "zktorch" in gt
+    def test_loads_all_projects(self, fictional_xlsx_path, fictional_gt_rows):
+        gt = load_ground_truth(fictional_xlsx_path)
+        expected_projects = {row["entry-id"].lower() for row in fictional_gt_rows}
+        assert set(gt.keys()) == expected_projects
 
-    def test_total_finding_count(self):
-        gt = load_ground_truth(XLSX_PATH)
+    def test_total_finding_count(self, fictional_xlsx_path, fictional_gt_rows):
+        gt = load_ground_truth(fictional_xlsx_path)
         total = sum(len(v) for v in gt.values())
-        assert total == 30
+        assert total == len(fictional_gt_rows)
 
-    def test_finding_has_all_fields(self):
-        gt = load_ground_truth(XLSX_PATH)
-        f = gt["zkllm"][0]
+    def test_finding_has_all_fields(self, fictional_xlsx_path):
+        gt = load_ground_truth(fictional_xlsx_path)
+        first_project = next(iter(gt.values()))
+        f = first_project[0]
         assert isinstance(f, GroundTruthFinding)
         assert f.entry_id
         assert f.issue_id
@@ -104,43 +102,44 @@ class TestLoadGroundTruth:
         assert f.category
         assert f.security_concern
 
-    def test_code_refs_parsed(self):
-        gt = load_ground_truth(XLSX_PATH)
-        # zkLLM-01 has two code refs
-        zkllm_01 = next(f for f in gt["zkllm"] if f.issue_id == "zkLLM-01")
-        assert len(zkllm_01.relevant_code) == 2
-        assert zkllm_01.relevant_code[0].filename == "rmsnorm.cu"
+    def test_code_refs_parsed(self, fictional_xlsx_path):
+        gt = load_ground_truth(fictional_xlsx_path)
+        # alpha-01 has two code refs in the fixture
+        alpha_01 = next(f for f in gt["alpha"] if f.issue_id == "alpha-01")
+        assert len(alpha_01.relevant_code) == 2
 
-    def test_empty_code_refs(self):
-        gt = load_ground_truth(XLSX_PATH)
-        # zkLLM-02 has no code refs ("None")
-        zkllm_02 = next(f for f in gt["zkllm"] if f.issue_id == "zkLLM-02")
-        assert zkllm_02.relevant_code == []
+    def test_empty_code_refs(self, fictional_xlsx_path):
+        gt = load_ground_truth(fictional_xlsx_path)
+        # alpha-03 has empty relevant-code in the fixture
+        alpha_03 = next(f for f in gt["alpha"] if f.issue_id == "alpha-03")
+        assert alpha_03.relevant_code == []
 
-    def test_paper_reference_dash(self):
-        gt = load_ground_truth(XLSX_PATH)
-        # zkLLM-02 has paper_reference = "-"
-        zkllm_02 = next(f for f in gt["zkllm"] if f.issue_id == "zkLLM-02")
-        assert zkllm_02.paper_reference == "-"
+    def test_paper_reference_dash(self, fictional_xlsx_path):
+        gt = load_ground_truth(fictional_xlsx_path)
+        # alpha-02 has paper_reference = "-" in the fixture
+        alpha_02 = next(f for f in gt["alpha"] if f.issue_id == "alpha-02")
+        assert alpha_02.paper_reference == "-"
 
-    def test_severity_values(self):
-        gt = load_ground_truth(XLSX_PATH)
+    def test_severity_values(self, fictional_xlsx_path):
+        gt = load_ground_truth(fictional_xlsx_path)
         all_severities = {f.severity for findings in gt.values() for f in findings}
         assert all_severities <= {"Critical", "Warning", "Info"}
 
-    def test_category_values(self):
-        gt = load_ground_truth(XLSX_PATH)
+    def test_category_values(self, fictional_xlsx_path):
+        gt = load_ground_truth(fictional_xlsx_path)
         from grader import CATEGORIES
         for findings in gt.values():
             for f in findings:
                 assert f.category in CATEGORIES, f"{f.issue_id}: {f.category}"
 
-    def test_security_concern_values(self):
-        gt = load_ground_truth(XLSX_PATH)
+    def test_security_concern_values(self, fictional_xlsx_path):
+        gt = load_ground_truth(fictional_xlsx_path)
         from grader import SECURITY_CONCERNS
         for findings in gt.values():
             for f in findings:
-                assert f.security_concern in SECURITY_CONCERNS, f"{f.issue_id}: {f.security_concern}"
+                assert f.security_concern in SECURITY_CONCERNS, (
+                    f"{f.issue_id}: {f.security_concern}"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +157,7 @@ class TestLoadAgentOutput:
     def test_valid_single_finding(self, tmp_path):
         data = [
             {
-                "entry-id": "zkLLM",
+                "entry-id": "alpha",
                 "issue-name": "Test Issue",
                 "issue-explanation": "Some explanation",
                 "severity": "Critical",
@@ -170,16 +169,16 @@ class TestLoadAgentOutput:
         ]
         path = _make_agent_json(data, tmp_path)
         result = load_agent_output(path)
-        assert "zkllm" in result
-        assert len(result["zkllm"]) == 1
-        f = result["zkllm"][0]
+        assert "alpha" in result
+        assert len(result["alpha"]) == 1
+        f = result["alpha"][0]
         assert f.issue_name == "Test Issue"
         assert f.severity == "Critical"
 
     def test_groups_by_entry_id(self, tmp_path):
         data = [
             {
-                "entry-id": "zkLLM",
+                "entry-id": "alpha",
                 "issue-name": "Issue A",
                 "issue-explanation": "Explanation A",
                 "severity": "Critical",
@@ -189,7 +188,7 @@ class TestLoadAgentOutput:
                 "paper-reference": "-",
             },
             {
-                "entry-id": "zkGPT",
+                "entry-id": "beta",
                 "issue-name": "Issue B",
                 "issue-explanation": "Explanation B",
                 "severity": "Warning",
@@ -199,7 +198,7 @@ class TestLoadAgentOutput:
                 "paper-reference": "-",
             },
             {
-                "entry-id": "zkLLM",
+                "entry-id": "alpha",
                 "issue-name": "Issue C",
                 "issue-explanation": "Explanation C",
                 "severity": "Info",
@@ -211,13 +210,13 @@ class TestLoadAgentOutput:
         ]
         path = _make_agent_json(data, tmp_path)
         result = load_agent_output(path)
-        assert len(result["zkllm"]) == 2
-        assert len(result["zkgpt"]) == 1
+        assert len(result["alpha"]) == 2
+        assert len(result["beta"]) == 1
 
     def test_missing_required_field_raises(self, tmp_path):
         data = [
             {
-                "entry-id": "zkLLM",
+                "entry-id": "alpha",
                 "issue-name": "Incomplete",
                 # missing issue-explanation, severity, etc.
             }
@@ -229,7 +228,7 @@ class TestLoadAgentOutput:
     def test_invalid_severity_raises(self, tmp_path):
         data = [
             {
-                "entry-id": "zkLLM",
+                "entry-id": "alpha",
                 "issue-name": "Bad Severity",
                 "issue-explanation": "Explanation",
                 "severity": "High",  # invalid
@@ -246,7 +245,7 @@ class TestLoadAgentOutput:
     def test_invalid_category_raises(self, tmp_path):
         data = [
             {
-                "entry-id": "zkLLM",
+                "entry-id": "alpha",
                 "issue-name": "Bad Category",
                 "issue-explanation": "Explanation",
                 "severity": "Critical",
@@ -263,7 +262,7 @@ class TestLoadAgentOutput:
     def test_invalid_security_concern_raises(self, tmp_path):
         data = [
             {
-                "entry-id": "zkLLM",
+                "entry-id": "alpha",
                 "issue-name": "Bad Concern",
                 "issue-explanation": "Explanation",
                 "severity": "Critical",
@@ -286,7 +285,7 @@ class TestLoadAgentOutput:
     def test_code_refs_parsed_in_agent(self, tmp_path):
         data = [
             {
-                "entry-id": "zkLLM",
+                "entry-id": "alpha",
                 "issue-name": "Test",
                 "issue-explanation": "Test",
                 "severity": "Critical",
@@ -298,7 +297,7 @@ class TestLoadAgentOutput:
         ]
         path = _make_agent_json(data, tmp_path)
         result = load_agent_output(path)
-        f = result["zkllm"][0]
+        f = result["alpha"][0]
         assert len(f.relevant_code) == 2
         assert f.relevant_code[0] == CodeRef("file.cu", 10, 20)
         assert f.relevant_code[1] == CodeRef("other.py", 5, 5)

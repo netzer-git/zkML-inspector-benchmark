@@ -15,11 +15,11 @@ zkML-inspector-benchmark/
 
 1. **Generate / curate the dataset.** Use `dataset_generator/` to produce the ground-truth audit-finding dataset (xlsx).
 2. **Load a run set.** Use `dataset_loader/` to fetch the paper PDFs and codebases referenced by the dataset and lay them out for the agent.
-3. **Run your agent.** Your agent reads each (paper, codebase) pair and produces a finding JSON. The expected format mirrors the dataset columns:
+3. **Run your agent.** Your agent reads each (paper, codebase) pair and produces a finding JSON. The expected format mirrors the dataset columns — see [`examples/agent_output.example.json`](examples/agent_output.example.json) for a complete reference file and [`examples/README.md`](examples/README.md) for the full schema including all closed-list values:
    ```json
    [
      {
-       "entry-id": "zkLLM",
+       "entry-id": "<project-key>",
        "issue-name": "...",
        "issue-explanation": "...",
        "severity": "Critical|Warning|Info",

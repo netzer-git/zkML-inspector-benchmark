@@ -265,7 +265,7 @@ class TestExtractSectionIds:
         assert "Section 4" in ids
 
     def test_multiple_sections(self):
-        text = "Section 2.3: Lasso; Section 4.3: leveraging; Protocol 1 Step (3)"
+        text = "Section 2.3: first; Section 4.3: second; Protocol 1 Step (3)"
         ids = _extract_section_ids(text)
         assert "Section 2.3" in ids
         assert "Section 4.3" in ids
@@ -300,8 +300,8 @@ class TestScorePaperReference:
 
     def test_exact_section_match(self, sim):
         r = score_paper_reference(
-            'Section 6.1.3: "compound non-arithmetic operations"',
-            'Section 6.1.3: "The compound non-arithmetic operations of square-root"',
+            'Section 6.1.3: "the widget output is range checked"',
+            'Section 6.1.3: "The widget output is always range checked before use"',
             sim,
         )
         # Section: 1.0, quote should have decent overlap
@@ -310,7 +310,7 @@ class TestScorePaperReference:
     def test_parent_section_match(self, sim):
         r = score_paper_reference(
             "Section 6.1: overview",
-            "Section 6.1.3: specific detail about normalization",
+            "Section 6.1.3: specific detail about widget gadgets",
             sim,
         )
         # Section should be 0.6 (parent match)
@@ -327,8 +327,8 @@ class TestScorePaperReference:
 
     def test_completely_different_sections(self, sim):
         r = score_paper_reference(
-            "Section 2: background on ZK",
-            "Section 8: experimental results with K=5 segments",
+            "Section 2: background and motivation",
+            "Section 8: experimental results and discussion",
             sim,
         )
         # No section overlap, minimal quote overlap
@@ -336,8 +336,8 @@ class TestScorePaperReference:
 
     def test_protocol_match(self, sim):
         r = score_paper_reference(
-            "Protocol 1: commit S and m before challenge",
-            "Protocol 1 (Lines 6-7): prover must commit S and m before verifier sends challenge",
+            "Protocol 1: commit x and y before challenge",
+            "Protocol 1 (Lines 6-7): prover must commit x and y before verifier sends challenge",
             sim,
         )
         assert r.score >= 0.5
