@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zkml-inspector-benchmark"
+version = "0.1.0"
+description = "Benchmark suite for ZK-ML audit agents: dataset generator, loader, and grader"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+    { name = "zkML-inspector-benchmark contributors" }
+]
+dependencies = [
+    "openpyxl>=3.1",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+# Future similarity backends
+similarity-tfidf = ["scikit-learn>=1.0"]
+similarity-embedding = ["sentence-transformers>=2.0"]
+similarity-llm = ["anthropic>=0.20"]
+
+[project.scripts]
+zkml-grader = "grader.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["grader*", "dataset_loader*", "dataset_generator*"]
+exclude = ["*.tests", "*.tests.*", "tests.*", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["grader/tests"]
+python_files = ["test_*.py"]
