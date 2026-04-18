@@ -64,6 +64,7 @@ def score_severity(agent_sev: str, gt_sev: str) -> FieldScore:
 
 _CATEGORY_PROXIMITY: dict[frozenset[str], float] = {
     frozenset({"Under-constrained Circuit", "Witness/Commitment Mismatch"}): 0.4,
+    frozenset({"Protocol/Transcript Logic", "Witness/Commitment Mismatch"}): 0.3,
     frozenset({"Engineering/Prototype Gap", "Specification Mismatch"}): 0.3,
 }
 

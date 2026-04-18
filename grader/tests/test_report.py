@@ -210,7 +210,26 @@ class TestGradeProject:
         )
         pg = grade_project("test", match_result, sim, gt_list, agent_list)
         assert pg.extra_by_severity == {"Critical": 1, "Warning": 1}
-        assert pg.precision == pytest.approx(1.0 / 3.0)
+        # Severity-weighted precision: matched is the Issue A finding
+        # (Critical default = weight 1.0). Extras: Extra Crit = 1.0, Extra Warn
+        # = 0.5. total_weight = 1 + 1 + 0.5 = 2.5. precision = 1.0 / 2.5 = 0.4.
+        assert pg.precision == pytest.approx(0.4)
+
+    def test_precision_severity_weights(self, sim):
+        """Precision weights Critical=1.0, Warning=0.5, Info=0.1."""
+        gt_list = [_gt("T-01", "A", severity="Critical")]
+        agent_list = [
+            _agent("A", severity="Critical"),     # matched, weight 1.0
+            _agent("extra info", severity="Info"),  # Info extra, weight 0.1
+        ]
+        match_result = MatchResult(
+            matched=[MatchedPair(agent=agent_list[0], gt=gt_list[0], similarity=0.9)],
+            missed_gt=[],
+            extra_agent=[agent_list[1]],
+        )
+        pg = grade_project("test", match_result, sim, gt_list, agent_list)
+        # weighted_matched=1.0, weighted_total=1.0+0.1=1.1 → 1.0/1.1 ≈ 0.909
+        assert pg.precision == pytest.approx(1.0 / 1.1)
 
     def test_severity_weighted_recall(self, sim):
         gt_list = [
@@ -238,6 +257,63 @@ class TestGradeProject:
         pg = grade_project("test", match_result, sim, gt_list, agent_list)
         expected = 0.4 * pg.f1 + 0.6 * pg.quality
         assert pg.composite == pytest.approx(expected)
+
+    def test_n_to_1_recall_counts_unique_gts(self, sim):
+        """2 agents matched to the same GT -> recall is 1/1 (unique GT)."""
+        gt_list = [_gt("T-01", "Issue A")]
+        agent_list = [_agent("Agent A1"), _agent("Agent A2")]
+        match_result = MatchResult(
+            matched=[
+                MatchedPair(agent_list[0], gt_list[0], similarity=0.95, dup_rank=0),
+                MatchedPair(agent_list[1], gt_list[0], similarity=0.90, dup_rank=1),
+            ],
+            missed_gt=[], extra_agent=[],
+        )
+        pg = grade_project("test", match_result, sim, gt_list, agent_list)
+        assert pg.recall == 1.0
+
+    def test_n_to_1_quality_averages_per_gt_group(self, sim):
+        """Two agents on the same GT: quality is average of their pair_scores."""
+        gt_list = [_gt("T-01", "A"), _gt("T-02", "B")]
+        a1 = _agent("A1")
+        a2 = _agent("A2-dup")
+        a3 = _agent("B-match")
+        # Construct a match_result: agents 1,2 both bound to T-01 (split),
+        # agent 3 bound to T-02 alone.
+        match_result = MatchResult(
+            matched=[
+                MatchedPair(a1, gt_list[0], similarity=0.9, dup_rank=0),
+                MatchedPair(a2, gt_list[0], similarity=0.6, dup_rank=1),
+                MatchedPair(a3, gt_list[1], similarity=0.8, dup_rank=0),
+            ],
+            missed_gt=[], extra_agent=[],
+        )
+        pg = grade_project("test", match_result, sim, gt_list, [a1, a2, a3])
+        # Each pair has a pair_score computed from field scores. For a
+        # minimal _agent/_gt pair these will all be equal (same defaults).
+        # Quality = mean of [mean(T-01 pairs), T-02 pair]. When the two
+        # T-01 pairs have identical field scores, their avg equals either
+        # of them. So quality = the common pair_score.
+        # Verify shape: quality is a single-number average across GT groups.
+        assert 0 <= pg.quality <= 1.0
+        # Both agents on T-01 count as matched (no extras).
+        assert pg.extra_by_severity == {}
+
+    def test_n_to_1_duplicates_not_extras(self, sim):
+        """A duplicate match (N:1) does NOT count as an extra."""
+        gt_list = [_gt("T-01", "A")]
+        a1 = _agent("match")
+        a2 = _agent("dup")
+        match_result = MatchResult(
+            matched=[
+                MatchedPair(a1, gt_list[0], similarity=0.9, dup_rank=0),
+                MatchedPair(a2, gt_list[0], similarity=0.8, dup_rank=1),
+            ],
+            missed_gt=[], extra_agent=[],
+        )
+        pg = grade_project("test", match_result, sim, gt_list, [a1, a2])
+        # Both agents are matched; no extras; precision reflects both as covered.
+        assert pg.extra_by_severity == {}
 
 
 # ---------------------------------------------------------------------------

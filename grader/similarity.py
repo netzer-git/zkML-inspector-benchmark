@@ -75,25 +75,26 @@ JUDGE_SCHEMA: dict[str, Any] = {
 
 
 _DEFAULT_SYSTEM_PROMPT = """\
-You are an expert judge for zkML audit findings. You decide whether an \
-auditor's finding describes the SAME root cause as a candidate ground-truth \
-finding in the same ZK circuit / protocol.
+You are an expert judge for zkML audit findings. For each candidate \
+ground-truth finding, decide how closely the auditor's finding describes the \
+same root cause in the same ZK circuit / protocol component.
 
-Two findings match only when they describe the same root cause in the same \
-cryptographic or protocol component. Shared keywords alone do not match. \
-Examples: "unconstrained activation witness" and "activation output freely \
-chosen by prover" are the same. "unconstrained activation" and "unconstrained \
-layer normalization" are different components and are NOT the same finding.
+A true match requires the same root cause in the same component. Shared \
+keywords alone do not match. "Unconstrained activation witness" and \
+"activation output freely chosen by prover" are the same; "unconstrained \
+activation" and "unconstrained layer normalization" are different components.
 
-Key failure modes to recognize: missing constraint, unconstrained witness, \
-uncommitted weights, out-of-order commit, wire disconnect between layers, \
-missing or weak Fiat-Shamir, quantization and fixed-point bugs. A soundness \
-gap lets a malicious prover produce a valid proof of an incorrect result.
+Key failure modes: missing constraint, unconstrained witness, uncommitted \
+weights, out-of-order commit, wire disconnect, missing/weak Fiat-Shamir, \
+quantization bugs. A soundness gap lets a malicious prover produce a valid \
+proof of an incorrect result.
 
-For every candidate, return:
-- match_score in [0, 1]: 1 = same finding; 0.5 = related but different \
-sub-issue; 0 = unrelated.
-- same_root_cause: true only if the same component and same failure mode.
+For every candidate return:
+- match_score: float in [0, 1], your confidence this is the same finding. \
+Guide: ~0.95 clear match, ~0.7 strong overlap with minor differences, ~0.5 related sub-issue, ~0.25 weak \
+keyword overlap, ~0.05 unrelated.
+- same_root_cause: true only if the same component AND the same failure \
+mode. Can be false even at high match_score for adjacent but distinct issues.
 - reasoning: one short sentence, under 40 words.
 
 Return exactly one judgment object per candidate, in the order given."""

@@ -3,6 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import sys
+
+
+def _force_utf8_stdout() -> None:
+    """Reconfigure stdout/stderr to UTF-8 so non-ASCII progress output
+    (agent finding names, judge reasoning previews) doesn't crash on
+    Windows' default cp1252 console."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
 
 from grader.loader import load_agent_output, load_ground_truth
 from grader.matcher import match_findings
@@ -89,7 +103,19 @@ def main(argv: list[str] | None = None) -> None:
         "--output-md", default=None,
         help="Path for markdown report output",
     )
+    parser.add_argument(
+        "--entry-id", action="append", default=None, metavar="ID",
+        help="Restrict grading to one or more entry-ids "
+             "(repeatable, case-insensitive). Default: all projects.",
+    )
+    parser.add_argument(
+        "--judge-trace", default=None, metavar="PATH",
+        help="Debug: write a markdown file with per-pair judge reasoning. "
+             "Shows every GT candidate the LLM scored for each agent finding.",
+    )
     args = parser.parse_args(argv)
+
+    _force_utf8_stdout()
 
     weights = _parse_weights(args.weights)
     backend = _build_backend()
@@ -103,11 +129,20 @@ def main(argv: list[str] | None = None) -> None:
     agent = load_agent_output(args.agent_output)
     print(f"  {sum(len(v) for v in agent.values())} findings across {len(agent)} projects")
 
+    # Optional entry-id filter — restricts both GT and agent dicts to the
+    # selected projects (case-insensitive).
+    if args.entry_id:
+        wanted = {eid.strip().lower() for eid in args.entry_id}
+        gt = {k: v for k, v in gt.items() if k in wanted}
+        agent = {k: v for k, v in agent.items() if k in wanted}
+        print(f"Filtering to entry-ids: {sorted(wanted)}")
+
     # Grade each project. Projects with no GT counterpart are skipped.
     # Projects that raise during matching/grading are isolated — logged,
     # recorded in report meta, and the rest of the run continues.
     all_projects = set(gt.keys()) | set(agent.keys())
     project_grades: dict = {}
+    match_results: dict = {}  # retained for --judge-trace rendering
     skipped_projects: list[str] = []
     failed_projects: list[dict[str, str]] = []
 
@@ -120,9 +155,19 @@ def main(argv: list[str] | None = None) -> None:
             print(f"  {project}: no ground truth available, skipping")
             continue
 
+        print(
+            f"\n==> Project {project}: "
+            f"{len(agent_findings)} agent findings vs {len(gt_findings)} GT -- "
+            f"matching (1 LLM call per agent finding)..."
+        )
         try:
             match_result = match_findings(
-                agent_findings, gt_findings, backend, args.threshold
+                agent_findings, gt_findings, backend, args.threshold,
+                verbose=True,
+            )
+            print(
+                f"    matching done. Grading {len(match_result.matched)} "
+                f"matched pair(s) (paper-ref LLM calls)..."
             )
             pg = grade_project(
                 project, match_result, backend, gt_findings, agent_findings, weights
@@ -137,6 +182,7 @@ def main(argv: list[str] | None = None) -> None:
             continue
 
         project_grades[project] = pg
+        match_results[project] = match_result
 
         n_matched = len(pg.matches)
         n_missed = len(pg.missed_gt)
@@ -173,8 +219,24 @@ def main(argv: list[str] | None = None) -> None:
         write_markdown_report(report, args.output_md)
         print(f"Markdown report written to {args.output_md}")
 
-    if not args.output and not args.output_md:
-        print("\nTip: use --output and/or --output-md to save the report.")
+    if args.judge_trace:
+        from grader.judge_trace import write_judge_trace
+        write_judge_trace(
+            path=args.judge_trace,
+            match_results=match_results,
+            meta={
+                "grader_version": report.meta["grader_version"],
+                "timestamp": report.meta["timestamp"],
+                "threshold": args.threshold,
+                "backend": "llm-judge",
+                "entry_ids": args.entry_id,
+            },
+            project_grades=project_grades,
+        )
+        print(f"Judge trace written to {args.judge_trace}")
+
+    if not args.output and not args.output_md and not args.judge_trace:
+        print("\nTip: use --output, --output-md, or --judge-trace to save output.")
 
 
 if __name__ == "__main__":

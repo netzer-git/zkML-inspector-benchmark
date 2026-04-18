@@ -12,7 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from grader.loader import AgentFinding, GroundTruthFinding
-from grader.similarity import JudgeCandidate, LLMJudgeSimilarity
+from grader.similarity import JudgeCandidate, JudgeResult, LLMJudgeSimilarity
 
 
 @dataclass
@@ -20,6 +20,26 @@ class MatchedPair:
     agent: AgentFinding
     gt: GroundTruthFinding
     similarity: float
+    # dup_rank = 0 for the first (best) agent that matched this GT;
+    # 1, 2, ... for subsequent agents that also matched the same GT.
+    # A non-zero dup_rank flags the pair as a duplicate/split — the GT was
+    # already bound to another agent when this pair was assigned.
+    dup_rank: int = 0
+
+
+@dataclass
+class AgentFindingTrace:
+    """Judge output for one agent finding: every candidate the LLM scored.
+
+    Populated by `match_findings` and surfaced in `MatchResult.traces`. The
+    normal grading report ignores this; it's consumed only by the debug-only
+    `--judge-trace` markdown output.
+    """
+    agent_index: int                      # position in the input agent_findings list
+    agent: AgentFinding
+    agent_text: str                       # the matching text shown to the judge
+    candidates: list[JudgeResult]         # full judgment list, in GT order
+    matched_gt_id: str | None = None      # set after greedy assignment if matched
 
 
 @dataclass
@@ -27,6 +47,7 @@ class MatchResult:
     matched: list[MatchedPair] = field(default_factory=list)
     missed_gt: list[GroundTruthFinding] = field(default_factory=list)
     extra_agent: list[AgentFinding] = field(default_factory=list)
+    traces: list[AgentFindingTrace] = field(default_factory=list)
 
     @property
     def extra_by_severity(self) -> dict[str, list[AgentFinding]]:
@@ -62,6 +83,7 @@ def match_findings(
     gt_findings: list[GroundTruthFinding],
     backend: LLMJudgeSimilarity,
     threshold: float = 0.3,
+    verbose: bool = False,
 ) -> MatchResult:
     """Match agent findings to GT findings using the LLM judge.
 
@@ -77,6 +99,8 @@ def match_findings(
         backend: An LLMJudgeSimilarity instance (must expose judge_bulk).
         threshold: Minimum match_score to consider a match (applied in AND
             with same_root_cause).
+        verbose: If True, print a progress line per agent finding to stdout.
+            Useful for long-running real-API runs; tests leave it off.
 
     Returns:
         MatchResult with matched pairs, missed GT findings, and extra agent
@@ -85,6 +109,7 @@ def match_findings(
     Raises:
         AttributeError: If the backend does not expose judge_bulk().
     """
+    import time
     if not agent_findings and not gt_findings:
         return MatchResult()
     if not agent_findings:
@@ -118,9 +143,37 @@ def match_findings(
     ]
     id_to_j = {gf.issue_id: j for j, gf in enumerate(gt_findings)}
 
+    traces: list[AgentFindingTrace] = []
     triples: list[tuple[float, int, int]] = []
     for i in range(m):
+        if verbose:
+            name_preview = (agent_findings[i].issue_name or "")[:60]
+            print(
+                f"    [{i + 1}/{m}] judging: {name_preview!r}",
+                end="", flush=True,
+            )
+        t0 = time.perf_counter()
         results = backend.judge_bulk(agent_texts[i], candidates)
+        elapsed = time.perf_counter() - t0
+        traces.append(AgentFindingTrace(
+            agent_index=i,
+            agent=agent_findings[i],
+            agent_text=agent_texts[i],
+            candidates=list(results),
+            matched_gt_id=None,
+        ))
+        best = max(
+            (r for r in results), key=lambda r: r.match_score, default=None
+        )
+        if verbose:
+            if best is not None:
+                print(
+                    f" -> top {best.match_score:.2f} / {best.gt_id!r} "
+                    f"(same_root_cause={best.same_root_cause}) [{elapsed:.1f}s]",
+                    flush=True,
+                )
+            else:
+                print(f" -> no candidates [{elapsed:.1f}s]", flush=True)
         for r in results:
             j = id_to_j.get(r.gt_id)
             if j is None:
@@ -129,25 +182,40 @@ def match_findings(
             if r.match_score >= threshold and r.same_root_cause:
                 triples.append((r.match_score, i, j))
 
-    # Greedy assignment: sort descending, assign greedily
+    # Assignment: sort triples by score desc and assign greedily.
+    #
+    # Each AGENT can bind to at most one GT (its highest-confidence one).
+    # Each GT can absorb MULTIPLE agents — if two agents both claim the same
+    # GT, both are recorded as matches. The first one to bind is "primary"
+    # (dup_rank=0); subsequent binders are duplicates (dup_rank=1, 2, ...).
+    # This reflects the case where the agent split one underlying issue into
+    # several findings; both agents should get credit and the user should
+    # see the duplication flagged in the report.
     triples.sort(key=lambda t: t[0], reverse=True)
 
     assigned_agent: set[int] = set()
-    assigned_gt: set[int] = set()
+    matched_gt_indices: set[int] = set()
+    gt_dup_count: dict[int, int] = {}
     matched: list[MatchedPair] = []
 
     for sim, i, j in triples:
-        if i in assigned_agent or j in assigned_gt:
-            continue
+        if i in assigned_agent:
+            continue  # agent already bound to its best GT
+        dup_rank = gt_dup_count.get(j, 0)
         matched.append(MatchedPair(
             agent=agent_findings[i],
             gt=gt_findings[j],
             similarity=sim,
+            dup_rank=dup_rank,
         ))
         assigned_agent.add(i)
-        assigned_gt.add(j)
+        matched_gt_indices.add(j)
+        gt_dup_count[j] = dup_rank + 1
+        traces[i].matched_gt_id = gt_findings[j].issue_id
 
-    missed_gt = [gt_findings[j] for j in range(n) if j not in assigned_gt]
+    missed_gt = [gt_findings[j] for j in range(n) if j not in matched_gt_indices]
     extra_agent = [agent_findings[i] for i in range(m) if i not in assigned_agent]
 
-    return MatchResult(matched=matched, missed_gt=missed_gt, extra_agent=extra_agent)
+    return MatchResult(
+        matched=matched, missed_gt=missed_gt, extra_agent=extra_agent, traces=traces,
+    )

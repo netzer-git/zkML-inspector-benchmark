@@ -33,6 +33,7 @@ coverage.xml
 # Generated grading artifacts
 grade_report.json
 grade_report.md
+judge_trace.md
 
 # Local datasets / agent outputs (users supply their own)
 *.xlsx

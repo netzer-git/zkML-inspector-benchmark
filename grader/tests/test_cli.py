@@ -399,3 +399,263 @@ class TestPerProjectErrorIsolation:
         ])
         data = json.loads(Path(out_json).read_text(encoding="utf-8"))
         assert "gamma" in data["meta"]["skipped_projects"]
+
+
+# ---------------------------------------------------------------------------
+# --entry-id filter
+# ---------------------------------------------------------------------------
+
+class TestEntryIdFilter:
+    def test_filter_restricts_to_selected_project(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(_bulk_responder({}))
+        out_json = str(tmp_path / "report.json")
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--entry-id", "alpha",
+            "--output", out_json,
+        ])
+        data = json.loads(Path(out_json).read_text(encoding="utf-8"))
+        assert set(data["projects"].keys()) == {"alpha"}
+
+    def test_filter_is_case_insensitive(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(_bulk_responder({}))
+        out_json = str(tmp_path / "report.json")
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--entry-id", "ALPHA",
+            "--output", out_json,
+        ])
+        data = json.loads(Path(out_json).read_text(encoding="utf-8"))
+        assert set(data["projects"].keys()) == {"alpha"}
+
+    def test_filter_repeatable_across_multiple_entries(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(_bulk_responder({}))
+        out_json = str(tmp_path / "report.json")
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--entry-id", "alpha",
+            "--entry-id", "beta",
+            "--output", out_json,
+        ])
+        data = json.loads(Path(out_json).read_text(encoding="utf-8"))
+        assert set(data["projects"].keys()) == {"alpha", "beta"}
+
+    def test_unknown_entry_id_produces_empty_report(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        """Filter to a non-existent entry-id → run completes with empty results."""
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(_bulk_responder({}))
+        out_json = str(tmp_path / "report.json")
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--entry-id", "nonexistent",
+            "--output", out_json,
+        ])
+        data = json.loads(Path(out_json).read_text(encoding="utf-8"))
+        assert data["projects"] == {}
+        assert data["overall"]["total_gt"] == 0
+
+
+# ---------------------------------------------------------------------------
+# --judge-trace debug output
+# ---------------------------------------------------------------------------
+
+class TestJudgeTrace:
+    def test_writes_trace_markdown(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        # Mock: alpha-01 matches perfectly; others don't
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
+            _bulk_responder({
+                "alpha-01": 0.95, "alpha-02": 0.1, "alpha-03": 0.1,
+                "beta-01": 0.95, "beta-02": 0.1,
+            })
+        )
+        trace_path = tmp_path / "trace.md"
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--judge-trace", str(trace_path),
+        ])
+        assert trace_path.exists()
+        content = trace_path.read_text(encoding="utf-8")
+        assert "# Judge Trace" in content
+        assert "Project: `alpha`" in content
+        assert "Project: `beta`" in content
+        # At least one MATCHED row (alpha-01 scored 0.95)
+        assert "**MATCHED**" in content
+
+    def test_trace_contains_candidate_reasoning(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        """Reasoning is now a column in the candidates table, not a bulleted list."""
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
+            _bulk_responder({"alpha-01": 0.9, "alpha-02": 0.2})
+        )
+        trace_path = tmp_path / "trace.md"
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--judge-trace", str(trace_path),
+        ])
+        content = trace_path.read_text(encoding="utf-8")
+        # Reasoning column header present in the candidates table
+        assert "| Reasoning |" in content
+        # Old bulleted list is gone
+        assert "Reasoning per candidate:" not in content
+        # The mock responder embeds "canned for <gt_id>" in reasoning
+        assert "canned for alpha-01" in content
+
+    def test_no_trace_file_without_flag(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(_bulk_responder({}))
+        # Pre-list of files in tmp_path before the run
+        before = set(tmp_path.iterdir())
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+        ])
+        after = set(tmp_path.iterdir())
+        # No new file should appear in tmp_path
+        assert after == before
+
+    def test_trace_empty_when_filtered_to_nothing(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(_bulk_responder({}))
+        trace_path = tmp_path / "trace.md"
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--entry-id", "nonexistent",
+            "--judge-trace", str(trace_path),
+        ])
+        assert trace_path.exists()
+        content = trace_path.read_text(encoding="utf-8")
+        # When no projects are graded, the trace notes that explicitly.
+        assert "No projects graded" in content
+
+
+# ---------------------------------------------------------------------------
+# New behaviors: emoji badges, pair-score breakdown, dup markers
+# ---------------------------------------------------------------------------
+
+class TestGradeReportBadges:
+    def test_green_badge_for_high_pair_score(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
+            _bulk_responder({
+                "alpha-01": 0.95, "alpha-02": 0.95, "alpha-03": 0.1,
+                "beta-01": 0.95, "beta-02": 0.1,
+            })
+        )
+        out_md = str(tmp_path / "report.md")
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--output-md", out_md,
+        ])
+        content = Path(out_md).read_text(encoding="utf-8")
+        # Should contain at least one green badge
+        assert "\U0001f7e2" in content  # 🟢
+
+    def test_red_badge_for_low_pair_score(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        """When pair scores are low (below 0.4), the red badge should appear."""
+        # Force low pair_scores by making the matches clear threshold but
+        # agent severity/category/etc differ from GT.
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
+            _bulk_responder({"alpha-01": 0.95})
+        )
+        # Agent output that matches alpha-01 but has mismatched fields so
+        # field scores are low.
+        agent_path = tmp_path / "agent.json"
+        agent_path.write_text(json.dumps([{
+            "entry-id": "alpha",
+            "issue-name": "Something",
+            "issue-explanation": "Unrelated words entirely here",
+            "severity": "Info",       # GT is Critical -> severity score 0
+            "category": "Other",      # GT is Under-constrained Circuit -> 0
+            "security-concern": "Other",  # GT is Proof Forgery -> 0.1
+            "relevant-code": "wrong/path.rs:999",  # no match
+            "paper-reference": "-",
+        }]))
+        out_md = str(tmp_path / "report.md")
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(agent_path),
+            "--output-md", out_md,
+        ])
+        content = Path(out_md).read_text(encoding="utf-8")
+        # Low pair_score should trigger red badge
+        assert "\U0001f534" in content  # 🔴
+
+
+class TestJudgeTracePairScoreBreakdown:
+    def test_matched_pair_has_breakdown_section(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
+            _bulk_responder({"alpha-01": 0.95, "alpha-02": 0.95,
+                             "alpha-03": 0.1, "beta-01": 0.95, "beta-02": 0.1})
+        )
+        trace_path = tmp_path / "trace.md"
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--judge-trace", str(trace_path),
+        ])
+        content = trace_path.read_text(encoding="utf-8")
+        # For a matched pair, the trace should include the pair-score
+        # breakdown section with a per-field table
+        assert "Pair-score breakdown" in content
+        assert "pair_score =" in content
+
+    def test_dup_rank_marker_in_breakdown(
+        self, tmp_path, fictional_xlsx_path, fictional_agent_json_path,
+        reset_override,
+    ):
+        """When multiple agents match one GT, the breakdown marks primary
+        and duplicate."""
+        # Make EVERY agent rate alpha-01 high so two agents bind to it.
+        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
+            _bulk_responder({
+                "alpha-01": 0.95, "alpha-02": 0.0, "alpha-03": 0.0,
+                "beta-01": 0.95, "beta-02": 0.0,
+            })
+        )
+        trace_path = tmp_path / "trace.md"
+        main([
+            "--ground-truth", str(fictional_xlsx_path),
+            "--agent-output", str(fictional_agent_json_path),
+            "--judge-trace", str(trace_path),
+        ])
+        content = trace_path.read_text(encoding="utf-8")
+        # Two alpha agents both matching alpha-01 -> the trace should flag
+        # the dup case somewhere
+        assert "(primary)" in content
+        assert "dup #1" in content
