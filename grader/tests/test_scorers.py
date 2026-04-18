@@ -11,7 +11,6 @@ from grader.scorers import (
     score_severity,
     _extract_section_ids,
 )
-from grader.similarity import JaccardSimilarity
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +277,8 @@ class TestExtractSectionIds:
 
 class TestScorePaperReference:
     @pytest.fixture
-    def sim(self):
-        return JaccardSimilarity()
+    def sim(self, word_overlap_similarity):
+        return word_overlap_similarity
 
     def test_gt_empty_skip(self, sim):
         r = score_paper_reference("Section 4: something", "-", sim)

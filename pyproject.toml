@@ -15,20 +15,18 @@ authors = [
 dependencies = [
     "openpyxl>=3.1",
     "numpy>=1.24",
+    "openai>=1.0",
+    "anthropic>=0.20",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
 ]
-# Similarity backends beyond the built-in Jaccard baseline
+# Reserved for future alternate similarity backends.
 similarity-tfidf = ["scikit-learn>=1.0"]
 similarity-embedding = ["sentence-transformers>=2.0"]
-similarity-openai = ["openai>=1.0", "python-dotenv>=1.0"]
-similarity-anthropic = ["anthropic>=0.20", "python-dotenv>=1.0"]
-llm = ["openai>=1.0", "anthropic>=0.20", "python-dotenv>=1.0"]
-# Deprecated alias for backwards compatibility; prefer similarity-anthropic.
-similarity-llm = ["anthropic>=0.20", "python-dotenv>=1.0"]
 
 [project.scripts]
 zkml-grader = "grader.cli:main"

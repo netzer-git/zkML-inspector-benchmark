@@ -36,27 +36,11 @@ zkML-inspector-benchmark/
 
 ### `grader/`
 
-Compares an agent's audit findings against a ground-truth dataset and produces JSON + markdown reports.
+Compares an agent's audit findings against a ground-truth dataset and produces JSON + markdown reports. Matching uses an LLM judge (OpenAI or Anthropic) that decides whether an agent finding describes the same root cause as a ground-truth finding. One LLM call is made per agent finding per project.
 
 ```bash
-python -m grader \
-    --ground-truth zkMLDataset.xlsx \
-    --agent-output agent_results.json \
-    --output grade_report.json \
-    --output-md grade_report.md
-```
-
-Scores 5 fields per matched finding (severity, category, security-concern, relevant-code, paper-reference) plus precision/recall/F1 across the matched set. Extra unmatched findings are reported broken down by severity. Finding matching uses a pluggable similarity backend (Jaccard baseline; TF-IDF / embeddings / LLM-as-judge can plug in via the `SimilarityBackend` interface).
-
-See `grader/` for full module docs and tests under `grader/tests/`.
-
-#### LLM-as-judge backend
-
-The matcher can use an LLM to decide whether an agent finding describes the same root cause as a ground-truth finding, instead of word-overlap similarity. One LLM call is made per agent finding per project (not per pair), so cost scales linearly with agent findings.
-
-```bash
-# Install provider extras (pick one, or use `.[llm]` for both)
-pip install -e .[similarity-openai]     # or .[similarity-anthropic]
+# Install
+pip install -e .
 
 # Configure keys
 cp .env.example .env
@@ -66,11 +50,13 @@ cp .env.example .env
 python -m grader \
     --ground-truth zkMLDataset.xlsx \
     --agent-output agent_results.json \
-    --backend llm-judge \
-    --output grade_report.json
+    --output grade_report.json \
+    --output-md grade_report.md
 ```
 
-Defaults: `OPENAI_MODEL=gpt-4o`, `ANTHROPIC_MODEL=claude-opus-4-5`. All env vars are documented in `.env.example`.
+Scores 5 fields per matched finding (severity, category, security-concern, relevant-code, paper-reference) plus precision, recall, F1, severity-weighted recall, and a composite quality score across the matched set. Extra unmatched agent findings are reported broken down by severity.
+
+Defaults: `OPENAI_MODEL=gpt-4o`, `ANTHROPIC_MODEL=claude-opus-4-5`. All env vars are documented in `.env.example`. See `grader/` for module docs and tests under `grader/tests/`.
 
 ### `dataset_loader/` *(planned)*
 

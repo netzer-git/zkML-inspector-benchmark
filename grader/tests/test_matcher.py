@@ -1,14 +1,30 @@
-"""Tests for grader.matcher module."""
+"""Tests for grader.matcher.
+
+The matcher uses the LLM judge exclusively. Every test here drives the
+matcher through an LLMJudgeSimilarity backed by a MockLLMProvider — no
+real API is contacted.
+"""
+
+from __future__ import annotations
+
+import re
 
 import pytest
 
+from grader.llm import MockLLMProvider
 from grader.loader import AgentFinding, CodeRef, GroundTruthFinding
-from grader.matcher import MatchResult, MatchedPair, match_findings
-from grader.similarity import JaccardSimilarity
+from grader.matcher import MatchResult, MatchedPair, _build_matching_text, match_findings
+from grader.similarity import LLMJudgeSimilarity
 
 
-def _gt(issue_id: str, name: str, explanation: str = "", severity: str = "Critical") -> GroundTruthFinding:
-    """Helper to create a GT finding with minimal fields."""
+def _gt(
+    issue_id: str,
+    name: str,
+    explanation: str = "default explanation",
+    severity: str = "Critical",
+    paper: str = "-",
+    code: list[CodeRef] | None = None,
+) -> GroundTruthFinding:
     return GroundTruthFinding(
         entry_id="test",
         issue_id=issue_id,
@@ -17,13 +33,18 @@ def _gt(issue_id: str, name: str, explanation: str = "", severity: str = "Critic
         severity=severity,
         category="Other",
         security_concern="Other",
-        relevant_code=[],
-        paper_reference="-",
+        relevant_code=code or [],
+        paper_reference=paper,
     )
 
 
-def _agent(name: str, explanation: str = "", severity: str = "Critical") -> AgentFinding:
-    """Helper to create an agent finding with minimal fields."""
+def _agent(
+    name: str,
+    explanation: str = "default explanation",
+    severity: str = "Critical",
+    paper: str = "-",
+    code: list[CodeRef] | None = None,
+) -> AgentFinding:
     return AgentFinding(
         entry_id="test",
         issue_name=name,
@@ -31,125 +52,371 @@ def _agent(name: str, explanation: str = "", severity: str = "Critical") -> Agen
         severity=severity,
         category="Other",
         security_concern="Other",
-        relevant_code=[],
-        paper_reference="-",
+        relevant_code=code or [],
+        paper_reference=paper,
     )
 
 
-class TestMatchFindings:
-    @pytest.fixture
-    def sim(self):
-        return JaccardSimilarity()
+def _responder_with_scores(score_map: dict[str, float], same_root_cause_map: dict[str, bool] | None = None):
+    """Build a responder that scores each candidate id using score_map.
 
-    def test_empty_both(self, sim):
-        result = match_findings([], [], sim)
+    Extracts the candidate ids from the user prompt. If same_root_cause_map
+    is not provided, same_root_cause is True whenever the score is >= 0.7.
+    """
+    def _responder(system, user, schema):
+        ids = re.findall(r"^\[([^\]]+)\]", user, re.MULTILINE)
+        return {
+            "judgments": [
+                {
+                    "gt_id": cid,
+                    "match_score": score_map.get(cid, 0.0),
+                    "same_root_cause": (
+                        same_root_cause_map[cid]
+                        if same_root_cause_map and cid in same_root_cause_map
+                        else score_map.get(cid, 0.0) >= 0.7
+                    ),
+                    "reasoning": f"canned for {cid}",
+                }
+                for cid in ids
+            ]
+        }
+    return _responder
+
+
+# ---------------------------------------------------------------------------
+# _build_matching_text
+# ---------------------------------------------------------------------------
+
+class TestBuildMatchingText:
+    def test_includes_all_three_fields(self):
+        text = _build_matching_text("n", "e", "Section 3.1: widget range check")
+        assert "n" in text
+        assert "e" in text
+        assert "Section 3.1" in text
+
+    def test_empty_paper_renders_as_none(self):
+        text = _build_matching_text("n", "e", "")
+        assert "Paper reference: (none)" in text
+
+    def test_dash_paper_renders_as_none(self):
+        text = _build_matching_text("n", "e", "-")
+        assert "Paper reference: (none)" in text
+
+    def test_whitespace_collapsed(self):
+        text = _build_matching_text("n   a    m  e", "e\n\nx", "  s 1  ")
+        assert "n a m e" in text
+        assert "e x" in text
+        assert "s 1" in text
+
+    def test_does_not_include_code_or_severity(self):
+        """Sanity: the builder doesn't take code refs or closed-list fields."""
+        text = _build_matching_text("widget bug", "expl", "-")
+        assert "widget bug" in text
+        # These should not appear unless we pass them in
+        assert "Critical" not in text
+        assert ".rs" not in text
+
+
+# ---------------------------------------------------------------------------
+# match_findings — empty inputs / edge cases
+# ---------------------------------------------------------------------------
+
+class TestMatchFindingsEmpty:
+    def test_empty_both(self):
+        provider = MockLLMProvider([])
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings([], [], judge)
         assert result.matched == []
         assert result.missed_gt == []
         assert result.extra_agent == []
+        assert provider.calls == []
 
-    def test_empty_agent(self, sim):
-        gt = [_gt("T-01", "Issue A")]
-        result = match_findings([], gt, sim)
+    def test_empty_agent(self):
+        provider = MockLLMProvider([])
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings([], [_gt("T-01", "issue")], judge)
         assert len(result.missed_gt) == 1
         assert result.matched == []
-        assert result.extra_agent == []
+        assert provider.calls == []
 
-    def test_empty_gt(self, sim):
-        agent = [_agent("Issue A")]
-        result = match_findings(agent, [], sim)
+    def test_empty_gt(self):
+        provider = MockLLMProvider([])
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings([_agent("issue")], [], judge)
         assert len(result.extra_agent) == 1
         assert result.matched == []
-        assert result.missed_gt == []
+        assert provider.calls == []
 
-    def test_perfect_match(self, sim):
-        gt = [_gt("T-01", "Unchecked widget output", "widget output has no range constraint")]
-        agent = [_agent("Unchecked widget output", "widget output has no range constraint")]
-        result = match_findings(agent, gt, sim, threshold=0.3)
+
+# ---------------------------------------------------------------------------
+# match_findings — LLM-driven matching behavior
+# ---------------------------------------------------------------------------
+
+class TestMatchFindingsLLM:
+    def test_single_perfect_match(self):
+        provider = MockLLMProvider(_responder_with_scores({"T-01": 0.95}))
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings(
+            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=0.3
+        )
         assert len(result.matched) == 1
-        assert result.matched[0].similarity == 1.0
-        assert result.missed_gt == []
-        assert result.extra_agent == []
+        assert result.matched[0].similarity == 0.95
+        assert len(provider.calls) == 1
 
-    def test_similar_match(self, sim):
-        gt = [_gt("T-01", "Static prover seed",
-                   "Witness generation uses a compile-time constant seed for the PRNG")]
-        agent = [_agent("Prover seed is static",
-                        "The witness PRNG is seeded at compile time with a constant value")]
-        result = match_findings(agent, gt, sim, threshold=0.2)
-        assert len(result.matched) == 1
-        assert result.matched[0].similarity > 0.2
+    def test_one_call_per_agent_finding(self):
+        provider = MockLLMProvider(_responder_with_scores(
+            {"T-01": 0.9, "T-02": 0.1}
+        ))
+        judge = LLMJudgeSimilarity(provider)
+        match_findings(
+            [_agent("a"), _agent("b"), _agent("c")],
+            [_gt("T-01", "gt1"), _gt("T-02", "gt2")],
+            judge,
+            threshold=0.3,
+        )
+        assert len(provider.calls) == 3  # one per agent finding
 
-    def test_no_match_below_threshold(self, sim):
-        gt = [_gt("T-01", "Completely unrelated topic one",
-                   "The one protocol has a fundamental flaw")]
-        agent = [_agent("Different subject two",
-                        "The two mechanism is broken in a novel way")]
-        result = match_findings(agent, gt, sim, threshold=0.5)
-        assert result.matched == []
-        assert len(result.missed_gt) == 1
-        assert len(result.extra_agent) == 1
-
-    def test_multiple_matches_greedy(self, sim):
-        gt = [
-            _gt("T-01", "Missing gadget range check", "widget gadget skips range validation"),
-            _gt("T-02", "Transcript missing public input", "public inputs not hashed into transcript"),
-        ]
-        agent = [
-            _agent("Transcript omits public input", "public inputs are not added to the transcript hash"),
-            _agent("Gadget range check absent", "the widget gadget does not validate ranges"),
-        ]
-        result = match_findings(agent, gt, sim, threshold=0.2)
+    def test_greedy_assignment_with_conflicting_preferences(self):
+        # Both agents prefer T-01, but 'alpha' preferred more strongly
+        provider = MockLLMProvider(_responder_with_scores(
+            {"T-01": 0.95, "T-02": 0.75}
+        ))
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings(
+            [_agent("alpha"), _agent("beta")],
+            [_gt("T-01", "gt1"), _gt("T-02", "gt2")],
+            judge,
+            threshold=0.3,
+        )
+        # Greedy gives T-01 to the first matching pair (they're both 0.95),
+        # and T-02 to the next best (0.75). Both agents match.
         assert len(result.matched) == 2
-        # Verify correct pairing
-        gt_ids_matched = {m.gt.issue_id for m in result.matched}
-        assert gt_ids_matched == {"T-01", "T-02"}
+        gt_ids = {m.gt.issue_id for m in result.matched}
+        assert gt_ids == {"T-01", "T-02"}
 
-    def test_more_agent_than_gt(self, sim):
-        gt = [_gt("T-01", "Issue alpha", "explanation alpha")]
-        agent = [
-            _agent("Issue alpha", "explanation alpha"),
-            _agent("Issue beta", "explanation beta"),
-            _agent("Issue gamma", "explanation gamma"),
-        ]
-        result = match_findings(agent, gt, sim, threshold=0.3)
+    def test_missed_and_extra_reported(self):
+        def responder(system, user, schema):
+            ids = re.findall(r"^\[([^\]]+)\]", user, re.MULTILINE)
+            # First agent matches T-01; second agent matches nothing
+            agent_line = user.split("AGENT FINDING:")[1].split("\n")[1]
+            if agent_line.startswith("agent1"):
+                scores = {cid: (0.9 if cid == "T-01" else 0.1) for cid in ids}
+            else:
+                scores = {cid: 0.1 for cid in ids}
+            return {
+                "judgments": [
+                    {
+                        "gt_id": cid,
+                        "match_score": scores[cid],
+                        "same_root_cause": scores[cid] >= 0.7,
+                        "reasoning": "",
+                    }
+                    for cid in ids
+                ]
+            }
+
+        provider = MockLLMProvider(responder)
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings(
+            [_agent("agent1"), _agent("agent2")],
+            [_gt("T-01", "first"), _gt("T-02", "second")],
+            judge,
+            threshold=0.3,
+        )
         assert len(result.matched) == 1
-        assert len(result.extra_agent) == 2
+        assert result.matched[0].gt.issue_id == "T-01"
+        assert len(result.missed_gt) == 1
+        assert result.missed_gt[0].issue_id == "T-02"
+        assert len(result.extra_agent) == 1
 
-    def test_more_gt_than_agent(self, sim):
+    def test_backend_without_judge_bulk_raises(self):
+        from grader.similarity import SimilarityBackend
+
+        class StubBackend(SimilarityBackend):
+            def score(self, a: str, b: str) -> float:
+                return 0.0
+
+        with pytest.raises(AttributeError, match="judge_bulk"):
+            match_findings(
+                [_agent("x")], [_gt("T-01", "y")], StubBackend(),
+            )
+
+
+# ---------------------------------------------------------------------------
+# Judge text content — verify what the judge sees
+# ---------------------------------------------------------------------------
+
+class TestJudgeTextContent:
+    def _capture_user_prompt(self, gt_list, agent_list, judge_responses=None):
+        """Run the matcher; return the first user prompt sent to the judge."""
+        captured: list[str] = []
+
+        def responder(system, user, schema):
+            captured.append(user)
+            if judge_responses is not None:
+                return judge_responses
+            # Default: return safe no-op judgments for all candidates
+            ids = re.findall(r"^\[([^\]]+)\]", user, re.MULTILINE)
+            return {
+                "judgments": [
+                    {"gt_id": cid, "match_score": 0.0,
+                     "same_root_cause": False, "reasoning": ""}
+                    for cid in ids
+                ]
+            }
+
+        provider = MockLLMProvider(responder)
+        judge = LLMJudgeSimilarity(provider)
+        match_findings(agent_list, gt_list, judge, threshold=0.3)
+        return captured[0] if captured else ""
+
+    def test_paper_reference_included(self):
+        gt = [_gt("T-01", "n", "e", paper='Section 3.1: "the gadget must be range-checked"')]
+        prompt = self._capture_user_prompt(gt, [_agent("ag")])
+        assert "Section 3.1" in prompt
+        assert "range-checked" in prompt
+
+    def test_code_refs_not_shown_to_judge(self):
+        """Code refs must NOT appear in the judge prompt."""
         gt = [
-            _gt("T-01", "Issue alpha", "explanation alpha"),
-            _gt("T-02", "Issue beta", "explanation beta"),
-            _gt("T-03", "Issue gamma", "explanation gamma"),
+            _gt("T-01", "n", "e", paper="-",
+                code=[CodeRef("src/secret_file.rs", 42, 42)]),
         ]
-        agent = [_agent("Issue alpha", "explanation alpha")]
-        result = match_findings(agent, gt, sim, threshold=0.3)
+        agent = [_agent("ag", code=[CodeRef("src/agent_file.rs", 10, 10)])]
+        prompt = self._capture_user_prompt(gt, agent)
+        assert "secret_file" not in prompt
+        assert "agent_file" not in prompt
+        assert ":42" not in prompt
+
+    def test_severity_and_category_not_shown(self):
+        """Closed-list fields must NOT appear in the judge prompt."""
+        gt = [_gt("T-01", "n", "e", severity="Critical")]
+        agent = [_agent("ag", severity="Warning")]
+        prompt = self._capture_user_prompt(gt, agent)
+        # Severity-value words shouldn't appear unless the name/explanation
+        # happens to include them — our synthetic "n", "e" don't.
+        assert "Critical" not in prompt
+        assert "Warning" not in prompt
+        # Category "Other" is the default on both helpers; make sure it's absent
+        assert "Other" not in prompt
+
+    def test_empty_paper_renders_as_none(self):
+        gt = [_gt("T-01", "n", "e", paper="-")]
+        prompt = self._capture_user_prompt(gt, [_agent("ag", paper="")])
+        assert "Paper reference: (none)" in prompt
+
+
+# ---------------------------------------------------------------------------
+# AND gate behavior
+# ---------------------------------------------------------------------------
+
+class TestAndGate:
+    def test_high_score_but_not_same_root_cause_does_not_match(self):
+        provider = MockLLMProvider(lambda s, u, sc: {
+            "judgments": [
+                {"gt_id": "T-01", "match_score": 0.95,
+                 "same_root_cause": False, "reasoning": "keyword overlap only"}
+            ]
+        })
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings(
+            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=0.3,
+        )
+        assert result.matched == []
+        assert len(result.missed_gt) == 1
+        assert len(result.extra_agent) == 1
+
+    def test_same_root_cause_but_below_threshold_does_not_match(self):
+        provider = MockLLMProvider(lambda s, u, sc: {
+            "judgments": [
+                {"gt_id": "T-01", "match_score": 0.2,
+                 "same_root_cause": True, "reasoning": "weak textual overlap"}
+            ]
+        })
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings(
+            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=0.3,
+        )
+        assert result.matched == []
+
+    def test_both_conditions_satisfied_produces_match(self):
+        provider = MockLLMProvider(lambda s, u, sc: {
+            "judgments": [
+                {"gt_id": "T-01", "match_score": 0.8,
+                 "same_root_cause": True, "reasoning": "same root cause"}
+            ]
+        })
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings(
+            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=0.3,
+        )
         assert len(result.matched) == 1
-        assert len(result.missed_gt) == 2
+        assert result.matched[0].similarity == 0.8
 
-    def test_threshold_zero_matches_everything(self, sim):
-        gt = [_gt("T-01", "X", "completely different words")]
-        agent = [_agent("Y", "absolutely no overlap at all")]
-        # Even with 0 overlap, threshold=0 should still need >0 sim
-        result = match_findings(agent, gt, sim, threshold=0.0)
-        # With Jaccard, completely disjoint sets give 0.0 which is >= 0.0
-        assert len(result.matched) == 1 or len(result.extra_agent) == 1
+    def test_threshold_boundary(self):
+        """Score exactly at threshold counts (>=)."""
+        provider = MockLLMProvider(lambda s, u, sc: {
+            "judgments": [
+                {"gt_id": "T-01", "match_score": 0.3,
+                 "same_root_cause": True, "reasoning": ""}
+            ]
+        })
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings(
+            [_agent("agent")], [_gt("T-01", "gt")], judge, threshold=0.3,
+        )
+        assert len(result.matched) == 1
 
-    def test_one_to_one_no_double_matching(self, sim):
-        gt = [
-            _gt("T-01", "commitment missing for lookup table",
-                 "lookup table T never committed"),
-            _gt("T-02", "commitment missing for witness values",
-                 "witness values S and m never committed"),
-        ]
-        agent = [
-            _agent("commitments missing",
-                   "lookup table and witness values never committed via Pedersen"),
-        ]
-        result = match_findings(agent, gt, sim, threshold=0.2)
-        # Agent matches one GT; the other is missed. No double-matching.
-        assert len(result.matched) <= 1
-        assert len(result.missed_gt) >= 1
 
+# ---------------------------------------------------------------------------
+# Candidate IDs are real issue_ids
+# ---------------------------------------------------------------------------
+
+class TestCandidateIds:
+    def test_real_issue_ids_appear_in_prompt(self):
+        captured: list[str] = []
+
+        def responder(system, user, schema):
+            captured.append(user)
+            return {"judgments": [
+                {"gt_id": "alpha-42", "match_score": 0.1,
+                 "same_root_cause": False, "reasoning": ""},
+                {"gt_id": "alpha-43", "match_score": 0.1,
+                 "same_root_cause": False, "reasoning": ""},
+            ]}
+
+        provider = MockLLMProvider(responder)
+        judge = LLMJudgeSimilarity(provider)
+        match_findings(
+            [_agent("ag")],
+            [_gt("alpha-42", "first"), _gt("alpha-43", "second")],
+            judge,
+            threshold=0.3,
+        )
+        assert "[alpha-42]" in captured[0]
+        assert "[alpha-43]" in captured[0]
+
+    def test_unknown_gt_id_in_response_silently_dropped(self):
+        """Defensive: if the LLM returns an id we didn't send, ignore it."""
+        provider = MockLLMProvider(lambda s, u, sc: {
+            "judgments": [
+                {"gt_id": "alpha-01", "match_score": 0.9,
+                 "same_root_cause": True, "reasoning": ""},
+                {"gt_id": "fictional-id", "match_score": 0.99,
+                 "same_root_cause": True, "reasoning": ""},
+            ]
+        })
+        judge = LLMJudgeSimilarity(provider)
+        result = match_findings(
+            [_agent("ag")], [_gt("alpha-01", "gt")], judge, threshold=0.3,
+        )
+        assert len(result.matched) == 1
+        assert result.matched[0].gt.issue_id == "alpha-01"
+
+
+# ---------------------------------------------------------------------------
+# MatchResult helpers
+# ---------------------------------------------------------------------------
 
 class TestMatchResultExtras:
     def test_extra_by_severity_empty(self):

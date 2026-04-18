@@ -17,7 +17,7 @@ python -m pytest grader/tests/test_scorers.py -v
 python -m pytest grader/tests/test_scorers.py::TestScoreSeverity -v
 python -m pytest grader/tests/test_scorers.py::TestScoreSeverity::test_exact_critical -v
 
-# Run the grader end-to-end
+# Run the grader end-to-end (requires .env with an API key — see .env.example)
 python -m grader \
     --ground-truth zkMLDataset.xlsx \
     --agent-output agent_results.json \
@@ -25,7 +25,7 @@ python -m grader \
     --output-md grade_report.md
 ```
 
-`pyproject.toml` exposes the grader as a `zkml-grader` console script after `pip install -e .`.
+`pyproject.toml` exposes the grader as a `zkml-grader` console script after `pip install -e .`. The grader makes real LLM calls (OpenAI by default) to match agent findings against ground truth — tests use `MockLLMProvider` to avoid any API traffic.
 
 ## Test fixtures
 
@@ -58,11 +58,11 @@ Module responsibilities:
 
 - **`grader/loader.py`** — parses the xlsx (ground truth) and the agent JSON. Both must include all 7 fields (severity, category, security-concern, relevant-code, paper-reference, issue-name, issue-explanation). `parse_code_refs` handles the `file:line[-line], file:line` format including unicode en-dashes. Entry IDs are normalized to lowercase as the grouping key. Validation is strict: invalid closed-list values raise `ValueError`.
 
-- **`grader/similarity.py`** — `SimilarityBackend` ABC with two concrete backends: `JaccardSimilarity` (word-overlap baseline, zero deps) and `LLMJudgeSimilarity` (LLM-as-judge via `LLMProvider`). The judge exposes a primary `judge_bulk(agent_text, candidates)` method that scores one agent finding against all GT candidates in a single LLM call, plus a `score(a, b)` compat path (degenerate 1-candidate bulk call) so paper-reference quote scoring still works. `JUDGE_SCHEMA` is strict and used verbatim by both OpenAI `response_format=json_schema` and Anthropic tool-use. Results are cached in-memory by SHA-256 of agent + sorted candidates; the richer `{match_score, same_root_cause, reasoning}` per-pair judgment is available via `last_result_for(agent_text, gt_id)` for future report enrichment (not yet wired into the report).
+- **`grader/similarity.py`** — `SimilarityBackend` ABC plus one production backend: `LLMJudgeSimilarity`. Exposes `judge_bulk(agent_text, candidates)` — the primary matching API, one LLM call returns a ranked list of per-candidate judgments `{gt_id, match_score, same_root_cause, reasoning}` — and `score(a, b)` for single-pair text similarity (used by paper-reference quote scoring). `JUDGE_SCHEMA` is strict and used verbatim by both OpenAI `response_format=json_schema` and Anthropic tool-use. Results are cached in-memory by SHA-256 of agent + sorted candidates. The richer per-pair judgment (beyond `match_score`) is reachable via `last_result_for(agent_text, gt_id)` for future report enrichment — it is collected today but not yet written into the report.
 
-- **`grader/llm.py`** — `LLMProvider` ABC with `OpenAIProvider`, `AnthropicProvider`, `MockLLMProvider`. Provider SDK imports are lazy (inside `__init__`) so the package works without `openai` or `anthropic` installed. `build_config_from_env()` reads `LLM_PROVIDER` (default `openai`), `OPENAI_API_KEY` / `OPENAI_MODEL` (default `gpt-4o`), `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` (default `claude-opus-4-5`). `.env` loading via `python-dotenv` is a soft dependency (silent no-op if not installed).
+- **`grader/llm.py`** — `LLMProvider` ABC with `OpenAIProvider`, `AnthropicProvider`, `MockLLMProvider`. Provider SDK imports are lazy (inside `__init__`) for a cleaner import-error message when a specific provider is missing. `build_config_from_env()` reads `LLM_PROVIDER` (default `openai`), `OPENAI_API_KEY` / `OPENAI_MODEL` (default `gpt-4o`), `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` (default `claude-opus-4-5`). `.env` loading via `python-dotenv` is required at runtime; both SDKs are required dependencies in `pyproject.toml`.
 
-- **`grader/matcher.py`** — operates **per-project** (never matches findings across entry-ids). Builds an `M×N` similarity matrix on `name + " " + explanation`, then does greedy 1:1 assignment above a threshold (default 0.3). Issue-ids are GT-only labels — agents produce findings in arbitrary order with no ID correspondence. Unmatched agent findings are exposed via `extra_by_severity` because hallucinated Critical findings are qualitatively different from extra Info suggestions. **The matcher detects `backend.judge_bulk` via `getattr` and prefers it** (one call per agent finding) over the M×N per-pair `score()` loop; do not assume either branch is always taken.
+- **`grader/matcher.py`** — operates **per-project** (never matches findings across entry-ids). Builds the judge text from each finding via `_build_matching_text` (`issue-name + issue-explanation + paper-reference` — code refs and closed-list fields are intentionally excluded), issues one `judge_bulk` call per agent finding, and applies an **AND gate**: a pair is considered a match only when `match_score >= threshold` AND `same_root_cause == True`. Greedy 1:1 assignment on the surviving triples resolves conflicts in favor of higher-scored pairs. Candidate IDs passed to the judge are real GT `issue_id`s so the judge's reasoning remains traceable. Unmatched agent findings are exposed via `extra_by_severity` because hallucinated Critical findings are qualitatively different from extra Info suggestions.
 
 - **`grader/scorers.py`** — one function per graded field, each returning `FieldScore(score, detail)`:
   - **Severity** uses an asymmetric 3×3 matrix where under-reporting (Warning when GT is Critical) scores 0.0 but over-reporting gets partial credit (0.25 for one level, 0.1 for two). This is deliberate — missing severity is the worst failure.
@@ -72,12 +72,15 @@ Module responsibilities:
 
 - **`grader/report.py`** — `_compute_pair_score` does weighted averaging of the field scores with **automatic redistribution of skipped fields' weights** to the remaining active ones (this is critical — don't change without updating tests). Default weights: code 0.30, paper 0.25, severity/category/security-concern 0.15 each. Aggregates into per-project metrics (precision, recall, F1, severity-weighted recall, quality, composite) and an overall `benchmark_score = 0.4 * f1 + 0.6 * quality`.
 
-- **`grader/cli.py` / `__main__.py`** — argparse orchestration. `_parse_weights` accepts `key=value` overrides. Projects with no GT are skipped with a printed notice. Weights and threshold are written into the report's `meta` block for reproducibility. `--backend llm-judge` activates the LLM backend; keys are read from `.env` at the repo root (see `.env.example`). `_LLM_PROVIDER_OVERRIDE` is a module-level test seam — tests monkeypatch it with a `MockLLMProvider` to avoid any real API calls.
+- **`grader/cli.py` / `__main__.py`** — argparse orchestration. `_parse_weights` accepts `key=value` overrides. Projects with no GT are skipped with a printed notice. Weights and threshold are written into the report's `meta` block for reproducibility. Backend construction (`_build_backend`) reads keys from `.env` (see `.env.example`) and raises `ValueError` with a pointer to `.env.example` if configuration is missing. `_LLM_PROVIDER_OVERRIDE` is a module-level test seam — tests monkeypatch it with a `MockLLMProvider` to avoid any real API calls.
 
 ### Closed-list constants
 
 Defined in `grader/__init__.py`. Updating these (adding a category, renaming a severity) requires touching multiple places: the constants, the proximity tables in `scorers.py`, the severity matrix and weight in `report.py`, and the corresponding tests. There are 3 severities, 7 categories + Other, and 7 security-concerns + Other.
 
-### Backend selection tradeoffs
+### Matching decisions
 
-Jaccard is intentionally rough — some obvious matches (different vocabulary for the same root cause) fall below 0.3. The upgrade path is `--backend llm-judge`, which is now built. Reach for the LLM backend when matching quality matters; keep Jaccard for CI / fast local iteration. The `same_root_cause` and `reasoning` fields the judge returns are collected (see `LLMJudgeSimilarity.last_result_for`) but are not yet wired into the report output — that's the next iteration.
+- **What the judge sees per finding**: `issue-name`, `issue-explanation`, and `paper-reference`. Code refs are excluded because the judge doesn't have the codebase loaded and a file/line alone is not self-sufficient evidence. The three closed-list fields (severity, category, security-concern) are excluded because they are graded independently by `scorers.py`; feeding them to the matcher would produce a circular signal.
+- **Why the AND gate**: the judge returns both a numeric `match_score` and a boolean `same_root_cause`. We require both to agree before declaring a match. This trades some recall for precision — a pair with high score but `same_root_cause=False` (model picked up keyword overlap but recognized the components differ) is correctly rejected.
+- **Why bulk, not pairwise**: the matcher issues one `judge_bulk` call per agent finding, passing all GT findings in that project as candidates. The LLM ranks comparatively in one call, which is both cheaper and usually more accurate than M×N isolated pair comparisons.
+- **Future report enrichment**: the judge's per-pair `same_root_cause` and `reasoning` are accumulated inside `LLMJudgeSimilarity` (see `last_result_for()`) but are not yet written into the JSON/markdown report. Wiring them in is the next iteration.

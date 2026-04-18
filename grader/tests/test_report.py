@@ -21,7 +21,6 @@ from grader.report import (
     _compute_pair_score,
 )
 from grader.scorers import FieldScore
-from grader.similarity import JaccardSimilarity
 
 
 def _gt(issue_id: str, name: str, severity: str = "Critical",
@@ -105,8 +104,8 @@ class TestComputePairScore:
 
 class TestGradePair:
     @pytest.fixture
-    def sim(self):
-        return JaccardSimilarity()
+    def sim(self, word_overlap_similarity):
+        return word_overlap_similarity
 
     def test_perfect_match(self, sim):
         gt = _gt("T-01", "Issue X", severity="Critical", category="Other", concern="Other")
@@ -157,8 +156,8 @@ class TestGradePair:
 
 class TestGradeProject:
     @pytest.fixture
-    def sim(self):
-        return JaccardSimilarity()
+    def sim(self, word_overlap_similarity):
+        return word_overlap_similarity
 
     def test_perfect_project(self, sim):
         gt_list = [_gt("T-01", "Issue A")]

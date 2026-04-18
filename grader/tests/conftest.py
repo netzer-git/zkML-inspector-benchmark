@@ -14,6 +14,30 @@ from pathlib import Path
 import openpyxl
 import pytest
 
+from grader.similarity import SimilarityBackend
+
+
+class WordOverlapSimilarity(SimilarityBackend):
+    """Deterministic word-overlap (Jaccard) similarity for tests only.
+
+    Lives in conftest (not production) because scorer tests need a predictable,
+    offline similarity for the paper-reference quote sub-score. Production code
+    always uses LLMJudgeSimilarity.
+    """
+
+    def score(self, text_a: str, text_b: str) -> float:
+        tokens_a = set(text_a.lower().split())
+        tokens_b = set(text_b.lower().split())
+        if not tokens_a or not tokens_b:
+            return 0.0
+        return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
+@pytest.fixture
+def word_overlap_similarity() -> WordOverlapSimilarity:
+    """A small word-overlap backend suitable for scoring tests."""
+    return WordOverlapSimilarity()
+
 
 # Synthetic ground-truth findings. Two fictional projects, five findings
 # covering all three severities, five categories, four security concerns.

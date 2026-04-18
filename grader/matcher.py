@@ -1,6 +1,9 @@
 """Finding matching: discover which agent findings correspond to which GT findings.
 
-Uses a similarity matrix and greedy assignment. Operates per-project.
+Uses the LLM judge (one call per agent finding, comparing to all GT findings
+in the same project) and greedy 1:1 assignment. Matching requires both the
+judge's numeric confidence (match_score >= threshold) AND its semantic verdict
+(same_root_cause == True).
 """
 
 from __future__ import annotations
@@ -9,7 +12,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from grader.loader import AgentFinding, GroundTruthFinding
-from grader.similarity import SimilarityBackend
+from grader.similarity import JudgeCandidate, LLMJudgeSimilarity
 
 
 @dataclass
@@ -34,74 +37,97 @@ class MatchResult:
         return dict(groups)
 
 
-def _build_similarity_text(name: str, explanation: str) -> str:
-    """Concatenate name and explanation for similarity comparison."""
-    return f"{name} {explanation}"
+def _build_matching_text(
+    name: str, explanation: str, paper_reference: str
+) -> str:
+    """Format a finding for the LLM judge: name + explanation + paper reference.
+
+    Whitespace-normalized. Code refs and the three closed-list fields
+    (severity/category/security-concern) are intentionally excluded — code
+    needs the codebase in hand to evaluate, and the closed-list fields are
+    graded independently downstream.
+    """
+    name = " ".join(name.split())
+    explanation = " ".join(explanation.split())
+    paper = " ".join(paper_reference.split()) if paper_reference else ""
+    if not paper or paper == "-":
+        paper_line = "Paper reference: (none)"
+    else:
+        paper_line = f"Paper reference: {paper}"
+    return f"{name}\n{explanation}\n{paper_line}"
 
 
 def match_findings(
     agent_findings: list[AgentFinding],
     gt_findings: list[GroundTruthFinding],
-    backend: SimilarityBackend,
+    backend: LLMJudgeSimilarity,
     threshold: float = 0.3,
 ) -> MatchResult:
-    """Match agent findings to GT findings using greedy assignment on similarity.
+    """Match agent findings to GT findings using the LLM judge.
+
+    Issues one bulk LLM call per agent finding, ranking against all GT
+    findings in the project. Matching requires BOTH numeric confidence
+    (match_score >= threshold) AND the judge's semantic verdict
+    (same_root_cause == True). After per-pair scoring, greedy 1:1 assignment
+    resolves conflicts in favor of higher-scored pairs.
 
     Args:
-        agent_findings: Unordered list of agent findings for one project.
+        agent_findings: Agent findings for one project, in arbitrary order.
         gt_findings: GT findings for the same project.
-        backend: Similarity scoring backend.
-        threshold: Minimum similarity to consider a match.
+        backend: An LLMJudgeSimilarity instance (must expose judge_bulk).
+        threshold: Minimum match_score to consider a match (applied in AND
+            with same_root_cause).
 
     Returns:
-        MatchResult with matched pairs, missed GT, and extra agent findings.
+        MatchResult with matched pairs, missed GT findings, and extra agent
+        findings.
+
+    Raises:
+        AttributeError: If the backend does not expose judge_bulk().
     """
     if not agent_findings and not gt_findings:
         return MatchResult()
-
     if not agent_findings:
         return MatchResult(missed_gt=list(gt_findings))
-
     if not gt_findings:
         return MatchResult(extra_agent=list(agent_findings))
+
+    if not hasattr(backend, "judge_bulk"):
+        raise AttributeError(
+            "match_findings requires a backend that exposes judge_bulk() — "
+            f"got {type(backend).__name__}"
+        )
 
     m = len(agent_findings)
     n = len(gt_findings)
 
-    # Build M x N similarity matrix
     agent_texts = [
-        _build_similarity_text(af.issue_name, af.issue_explanation)
+        _build_matching_text(
+            af.issue_name, af.issue_explanation, af.paper_reference
+        )
         for af in agent_findings
     ]
-    gt_texts = [
-        _build_similarity_text(gf.issue_name, gf.issue_explanation)
+    candidates = [
+        JudgeCandidate(
+            gt_id=gf.issue_id,
+            text=_build_matching_text(
+                gf.issue_name, gf.issue_explanation, gf.paper_reference
+            ),
+        )
         for gf in gt_findings
     ]
+    id_to_j = {gf.issue_id: j for j, gf in enumerate(gt_findings)}
 
     triples: list[tuple[float, int, int]] = []
-    judge_bulk = getattr(backend, "judge_bulk", None)
-    if callable(judge_bulk):
-        # Bulk LLM-judge path: one call per agent finding, ranked output
-        # against all GT candidates for this project.
-        from grader.similarity import JudgeCandidate
-
-        candidates = [
-            JudgeCandidate(gt_id=str(j), text=gt_texts[j]) for j in range(n)
-        ]
-        for i in range(m):
-            results = judge_bulk(agent_texts[i], candidates)
-            by_id = {r.gt_id: r for r in results}
-            for j in range(n):
-                r = by_id.get(str(j))
-                if r is not None and r.match_score >= threshold:
-                    triples.append((r.match_score, i, j))
-    else:
-        # Per-pair path for symmetric backends (Jaccard, future TF-IDF, etc.)
-        for i in range(m):
-            for j in range(n):
-                sim = backend.score(agent_texts[i], gt_texts[j])
-                if sim >= threshold:
-                    triples.append((sim, i, j))
+    for i in range(m):
+        results = backend.judge_bulk(agent_texts[i], candidates)
+        for r in results:
+            j = id_to_j.get(r.gt_id)
+            if j is None:
+                continue  # defensive: judge returned an id we didn't send
+            # AND gate: both numeric confidence and semantic verdict required
+            if r.match_score >= threshold and r.same_root_cause:
+                triples.append((r.match_score, i, j))
 
     # Greedy assignment: sort descending, assign greedily
     triples.sort(key=lambda t: t[0], reverse=True)

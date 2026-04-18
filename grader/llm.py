@@ -116,7 +116,7 @@ class OpenAIProvider(LLMProvider):
         except ImportError as e:
             raise LLMConfigError(
                 "openai package is required for LLM_PROVIDER=openai. "
-                "Install with: pip install zkml-inspector-benchmark[similarity-openai]"
+                "Install with: pip install openai"
             ) from e
         self._client = OpenAI(api_key=config.api_key, timeout=config.timeout_s)
 
@@ -161,7 +161,7 @@ class AnthropicProvider(LLMProvider):
         except ImportError as e:
             raise LLMConfigError(
                 "anthropic package is required for LLM_PROVIDER=anthropic. "
-                "Install with: pip install zkml-inspector-benchmark[similarity-anthropic]"
+                "Install with: pip install anthropic"
             ) from e
         self._client = anthropic.Anthropic(api_key=config.api_key, timeout=config.timeout_s)
 

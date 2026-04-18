@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
 from grader.loader import load_agent_output, load_ground_truth
 from grader.matcher import match_findings
@@ -14,7 +13,12 @@ from grader.report import (
     write_json_report,
     write_markdown_report,
 )
-from grader.similarity import JaccardSimilarity, SimilarityBackend
+from grader.similarity import LLMJudgeSimilarity
+
+
+# Test seam: tests may monkeypatch this attribute with a MockLLMProvider to
+# exercise the pipeline without hitting a real API.
+_LLM_PROVIDER_OVERRIDE = None
 
 
 def _parse_weights(raw: str | None) -> dict[str, float]:
@@ -31,43 +35,34 @@ def _parse_weights(raw: str | None) -> dict[str, float]:
     return weights
 
 
-# Test seam: tests may monkeypatch this attribute with a MockLLMProvider to
-# exercise the llm-judge code path without hitting a real API.
-_LLM_PROVIDER_OVERRIDE = None
+def _build_backend() -> LLMJudgeSimilarity:
+    """Construct the LLM judge backend from env, or from the test override."""
+    if _LLM_PROVIDER_OVERRIDE is not None:
+        return LLMJudgeSimilarity(_LLM_PROVIDER_OVERRIDE)
 
-
-def _get_backend(name: str) -> SimilarityBackend:
-    if name == "jaccard":
-        return JaccardSimilarity()
-    if name == "llm-judge":
-        from grader.similarity import LLMJudgeSimilarity
-
-        if _LLM_PROVIDER_OVERRIDE is not None:
-            return LLMJudgeSimilarity(_LLM_PROVIDER_OVERRIDE)
-
-        from grader.llm import (
-            build_config_from_env,
-            build_provider,
-            load_dotenv_if_available,
-        )
-        load_dotenv_if_available()
-        try:
-            cfg = build_config_from_env()
-        except Exception as e:
-            raise ValueError(
-                f"llm-judge backend requires env configuration. "
-                f"See .env.example. {e}"
-            ) from e
-        return LLMJudgeSimilarity(build_provider(cfg))
-    raise ValueError(
-        f"Unknown similarity backend: {name}. Available: ['jaccard', 'llm-judge']"
+    from grader.llm import (
+        build_config_from_env,
+        build_provider,
+        load_dotenv_if_available,
     )
+    load_dotenv_if_available()
+    try:
+        cfg = build_config_from_env()
+    except Exception as e:
+        raise ValueError(
+            f"The grader requires LLM configuration. See .env.example. {e}"
+        ) from e
+    return LLMJudgeSimilarity(build_provider(cfg))
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="grader",
-        description="zkML Agents Benchmark Grader",
+        description=(
+            "zkML Agents Benchmark Grader. Uses an LLM judge (OpenAI or "
+            "Anthropic) to match agent findings to ground-truth findings. "
+            "Configure via .env (see .env.example)."
+        ),
     )
     parser.add_argument(
         "--ground-truth", required=True,
@@ -79,15 +74,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--threshold", type=float, default=0.3,
-        help="Minimum similarity for a match (default: 0.3)",
-    )
-    parser.add_argument(
-        "--backend", default="jaccard",
-        help=(
-            "Similarity backend: 'jaccard' (default) or 'llm-judge' "
-            "(requires .env with OPENAI_API_KEY or ANTHROPIC_API_KEY; "
-            "see .env.example)"
-        ),
+        help="Minimum match_score for a match (default: 0.3). "
+             "same_root_cause must also be True.",
     )
     parser.add_argument(
         "--weights", default=None,
@@ -104,7 +92,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     weights = _parse_weights(args.weights)
-    backend = _get_backend(args.backend)
+    backend = _build_backend()
 
     # Load data
     print(f"Loading ground truth from {args.ground_truth}...")
@@ -145,8 +133,8 @@ def main(argv: list[str] | None = None) -> None:
             f"{n_extra} extra{extra_detail}, composite={pg.composite:.3f}"
         )
 
-    # Build report
-    report = build_report(project_grades, args.threshold, weights, args.backend)
+    # Build report (backend is fixed now — "llm-judge")
+    report = build_report(project_grades, args.threshold, weights, "llm-judge")
 
     o = report.overall
     print(f"\nOverall: benchmark_score={o['benchmark_score']:.4f}, "

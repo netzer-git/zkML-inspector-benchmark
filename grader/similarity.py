@@ -1,15 +1,14 @@
-"""Pluggable similarity interface for finding matching and text comparison.
+"""Similarity interface and LLM-as-judge backend used by the grader.
 
-Ships with a Jaccard baseline and an LLM-as-judge backend. Future backends
-(TF-IDF, embeddings) implement the same SimilarityBackend interface so
-matcher/scorers need no changes.
+The matcher is built around the LLM judge (see LLMJudgeSimilarity). The
+SimilarityBackend ABC is kept minimal so future backends (TF-IDF, embeddings)
+can plug into the single-pair `score()` path used by the paper-reference
+quote scorer.
 """
 
 from __future__ import annotations
 
 import hashlib
-import re
-import unicodedata
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Sequence
@@ -17,32 +16,18 @@ from typing import Any, Sequence
 from grader.llm import LLMProvider, LLMResponseError
 
 
-def normalize_text(text: str) -> str:
-    """Lowercase, strip accents, remove punctuation, collapse whitespace."""
-    text = text.lower()
-    text = unicodedata.normalize("NFKD", text)
-    text = re.sub(r"[^\w\s]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
 class SimilarityBackend(ABC):
-    """Abstract base for text similarity scoring."""
+    """Abstract base for single-pair text similarity scoring.
+
+    Production matching uses LLMJudgeSimilarity, which additionally exposes
+    `judge_bulk()` for bulk ranking. Backends that only need single-pair
+    comparison (e.g., for paper-reference quote scoring in tests) implement
+    just `score()`.
+    """
 
     @abstractmethod
     def score(self, text_a: str, text_b: str) -> float:
         """Return similarity in [0, 1]. 0 = unrelated, 1 = identical."""
-
-
-class JaccardSimilarity(SimilarityBackend):
-    """Word-level Jaccard similarity. Zero extra dependencies."""
-
-    def score(self, text_a: str, text_b: str) -> float:
-        tokens_a = set(normalize_text(text_a).split())
-        tokens_b = set(normalize_text(text_b).split())
-        if not tokens_a or not tokens_b:
-            return 0.0
-        return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
 
 
 # ---------------------------------------------------------------------------
