@@ -63,9 +63,23 @@ def score_severity(agent_sev: str, gt_sev: str) -> FieldScore:
 # ---------------------------------------------------------------------------
 
 _CATEGORY_PROXIMITY: dict[frozenset[str], float] = {
+    # Missing commitments can read as either "no constraint" or "wrong witness".
     frozenset({"Under-constrained Circuit", "Witness/Commitment Mismatch"}): 0.4,
+    # "Circuit diverges from paper spec" vs "circuit missing constraints" —
+    # same underlying symptom from two angles (e.g. zkLLM-06 RoPE outside-circuit).
+    frozenset({"Under-constrained Circuit", "Specification Mismatch"}): 0.4,
+    # Transcript/commitment ordering bugs straddle the witness-commitment line.
     frozenset({"Protocol/Transcript Logic", "Witness/Commitment Mismatch"}): 0.3,
+    # Hardcoded challenges / stub protocols are both transcript and prototype
+    # issues (e.g. zkML-01 Freivalds hardcoded challenge).
+    frozenset({"Protocol/Transcript Logic", "Engineering/Prototype Gap"}): 0.3,
+    # Prototype stubs that skip a spec behaviour vs explicit spec divergence.
     frozenset({"Engineering/Prototype Gap", "Specification Mismatch"}): 0.3,
+    # Empty proof stubs: agent may flag the missing constraint, GT flags the
+    # unfinished engineering.
+    frozenset({"Under-constrained Circuit", "Engineering/Prototype Gap"}): 0.2,
+    # Hardcoded quantization values read as both a numerical bug and a stub.
+    frozenset({"Numerical/Quantization Bug", "Engineering/Prototype Gap"}): 0.2,
 }
 
 
@@ -145,7 +159,9 @@ def _score_single_code_ref(agent_refs: list[CodeRef], gt_ref: CodeRef) -> float:
         if dist is None:
             # Same file but no line numbers to compare
             best = max(best, 0.2)
-        elif dist == 0:
+        elif dist <= 2:
+            # Treat "adjacent" (off-by-1 or -2) as a hit. Agents commonly cite
+            # the function-signature line while GT cites the function body.
             best = max(best, 1.0)
         elif dist <= 30:
             best = max(best, 0.7)
@@ -179,28 +195,60 @@ def score_code_location(
 
 _SECTION_PATTERN = re.compile(
     r"(?:Section|Sec\.?)\s+(\d+(?:\.\d+)*)"
+    r"|\u00a7\s*(\d+(?:\.\d+)*)"
     r"|(?:Protocol)\s+(\d+)"
-    r"|(?:Theorem)\s+(\d+(?:\.\d+)*)"
+    r"|(?:Theorem|Thm\.?)\s+(\d+(?:\.\d+)*)"
     r"|(?:Eq\.?|Equation)\s+\(?(\d+)\)?"
-    r"|(?:Example)\s+(\d+(?:\.\d+)*)",
+    r"|(?:Example|Ex\.?)\s+(\d+(?:\.\d+)*)"
+    r"|(?:Figure|Fig\.?)\s+(\d+(?:\.\d+)*)"
+    r"|(?:Appendix|App\.?)\s+([A-Z](?:\.\d+)*)"
+    r"|(?:Definition|Def\.?)\s+(\d+(?:\.\d+)*)"
+    r"|(?:Step)\s+\(?(\d+)\)?"
+    r"|(?:Lines?)\s+(\d+)(?:\s*[-\u2013\u2014]\s*\d+)?",
     re.IGNORECASE,
 )
 
+# Group names are indexed 1..N in the order of alternatives above. § is treated
+# as a Section synonym so downstream logic doesn't need to special-case it.
+_SECTION_GROUP_NAMES = [
+    "Section",    # 1: Section/Sec
+    "Section",    # 2: §
+    "Protocol",   # 3
+    "Theorem",    # 4
+    "Equation",   # 5
+    "Example",    # 6
+    "Figure",     # 7
+    "Appendix",   # 8
+    "Definition", # 9
+    "Step",       # 10
+    "Line",       # 11
+]
+
 
 def _extract_section_ids(text: str) -> list[str]:
-    """Extract structured section identifiers from paper reference text."""
+    """Extract structured section identifiers from paper reference text.
+
+    Captures Section / §, Protocol, Theorem, Equation, Example, Figure,
+    Appendix, Definition, Step, and Line N (line ranges normalise to the
+    starting line). Returned IDs look like "Section 4.3", "Appendix A.2",
+    "Step 3", "Line 22".
+    """
     ids: list[str] = []
     for m in _SECTION_PATTERN.finditer(text):
-        for i, group_name in enumerate(
-            ["Section", "Protocol", "Theorem", "Equation", "Example"], 1
-        ):
+        for i, group_name in enumerate(_SECTION_GROUP_NAMES, 1):
             if m.group(i):
                 ids.append(f"{group_name} {m.group(i)}")
     return ids
 
 
 def _section_similarity(agent_ids: list[str], gt_ids: list[str]) -> float:
-    """Score section ID overlap. Handles exact, parent, and top-level matches."""
+    """Score section ID overlap.
+
+    A GT cell may list several paper anchors (e.g. "Protocol 1 Lines 6-7;
+    Protocol 2 Line 22") when the same bug has multiple paper touchpoints.
+    Any one valid anchor proves the agent points at the correct argument, so
+    we return the *max* best-per-GT score rather than averaging them.
+    """
     if not gt_ids:
         return 1.0  # No sections expected
     if not agent_ids:
@@ -237,7 +285,7 @@ def _section_similarity(agent_ids: list[str], gt_ids: list[str]) -> float:
                 best = max(best, 0.3)  # Same top-level section
         best_per_gt.append(best)
 
-    return sum(best_per_gt) / len(best_per_gt)
+    return max(best_per_gt)
 
 
 def _extract_quotes(text: str) -> str:
@@ -264,10 +312,14 @@ def score_paper_reference(
     gt_sections = _extract_section_ids(gt_ref)
     section_score = _section_similarity(agent_sections, gt_sections)
 
-    # Quote/claim similarity (weight 0.5)
+    # Quote/claim similarity (weight 0.5). Backends that expose
+    # `score_paper_quote` use a dedicated prompt tuned for paper-passage
+    # equivalence; backends that only implement `score` (e.g. tests) fall
+    # back to generic single-pair similarity.
     agent_quote = _extract_quotes(agent_ref)
     gt_quote = _extract_quotes(gt_ref)
-    quote_score = similarity.score(agent_quote, gt_quote)
+    quote_fn = getattr(similarity, "score_paper_quote", similarity.score)
+    quote_score = quote_fn(agent_quote, gt_quote)
 
     combined = 0.5 * section_score + 0.5 * quote_score
     detail = f"section={section_score:.2f}, quote={quote_score:.2f}"

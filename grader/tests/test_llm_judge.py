@@ -208,6 +208,38 @@ class TestLLMJudgeSimilarity:
         judge.score("a", "b")
         assert len(provider.calls) == 1
 
+    def test_score_paper_quote_returns_float_and_maps_1_to_5(self):
+        provider = MockLLMProvider(_canned_response({"_pair": 5}))
+        judge = LLMJudgeSimilarity(provider)
+        assert judge.score_paper_quote("agent quote", "gt quote") == 1.0
+
+    def test_score_paper_quote_uses_dedicated_system_prompt(self):
+        """The quote path sends the paper-quote prompt, not the finding prompt."""
+        provider = MockLLMProvider(_canned_response({"_pair": 4}))
+        judge = LLMJudgeSimilarity(provider)
+        judge.score_paper_quote("quantized equation", "continuous equation")
+        system_used = provider.calls[0][0]
+        assert "paper" in system_used.lower()
+        # Finding-matching prompt keywords should not appear here.
+        assert "zkML audit findings" not in system_used
+
+    def test_score_paper_quote_caches_repeated_queries(self):
+        provider = MockLLMProvider(_canned_response({"_pair": 3}))
+        judge = LLMJudgeSimilarity(provider)
+        judge.score_paper_quote("a", "b")
+        judge.score_paper_quote("a", "b")
+        assert len(provider.calls) == 1
+
+    def test_score_paper_quote_cache_does_not_collide_with_score(self):
+        """Using the same (a, b) text via .score() vs .score_paper_quote()
+        hits different caches (different prompts, different results)."""
+        provider = MockLLMProvider(_canned_response({"_pair": 5}))
+        judge = LLMJudgeSimilarity(provider)
+        judge.score("a", "b")
+        judge.score_paper_quote("a", "b")
+        # Two distinct calls because caches are separate.
+        assert len(provider.calls) == 2
+
     def test_last_result_for_returns_structured_judgment(self):
         provider = MockLLMProvider(_canned_response({"0": 5, "1": 1}))
         judge = LLMJudgeSimilarity(provider)

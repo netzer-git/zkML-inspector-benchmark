@@ -105,6 +105,39 @@ For every candidate return:
 Return exactly one judgment object per candidate, in the order given."""
 
 
+_PAPER_QUOTE_SYSTEM_PROMPT = """\
+You compare two excerpts taken from the same zkML paper. Each excerpt is \
+either a direct quote, a paraphrase, or a short descriptive reference to a \
+passage, equation, protocol step, theorem, or figure.
+
+Decide how strongly the two excerpts point to the same underlying paper \
+passage / claim / equation.
+
+Be generous with:
+- Paraphrases of the same sentence.
+- Quantized vs continuous forms of the same formula (e.g. \
+"y = gamma*(x-mu)/sigma + beta" and the quantized "q_y = round(...)" are the same \
+equation).
+- Different notation or symbol substitutions that preserve meaning.
+- Shortened vs expanded descriptions of the same protocol step.
+
+Be strict about:
+- Excerpts that name different sections or different equations even if they \
+share vocabulary.
+- Shared high-level topic but different specific claims.
+
+Return for every candidate:
+- match_score: integer 1..5
+  5 = Same passage / same claim / same equation (paraphrased forms count).
+  4 = Very likely same passage; different wording, same technical content.
+  3 = Related passage or near-neighbor claim, but not the same one.
+  2 = Shared topic only; different specific claims.
+  1 = Unrelated.
+- reasoning: one short sentence, under 40 words.
+
+Return exactly one judgment per candidate, in the order given."""
+
+
 def _build_user_prompt(agent_text: str, candidates: Sequence[JudgeCandidate]) -> str:
     lines = ["AGENT FINDING:", agent_text.strip(), "", "CANDIDATE GT FINDINGS:"]
     for c in candidates:
@@ -169,13 +202,17 @@ class LLMJudgeSimilarity(SimilarityBackend):
         self._cache: dict[str, list[JudgeResult]] = {}
         # Flat lookup: (agent_text, gt_id) -> JudgeResult for later enrichment
         self._last_results: dict[tuple[str, str], JudgeResult] = {}
+        # Separate cache for paper-quote comparisons so the two prompt modes
+        # don't cross-contaminate.
+        self._quote_cache: dict[str, float] = {}
 
     def score(self, text_a: str, text_b: str) -> float:
-        """Compatibility path -- single-candidate bulk call.
+        """Compatibility path -- single-candidate bulk call using the
+        finding-matching prompt.
 
-        Returns a float in [0, 1] to preserve the SimilarityBackend contract.
-        The judge returns a 1..5 integer; we map that linearly to [0, 1] via
-        (score - 1) / 4 so callers like score_paper_reference keep working.
+        Most callers should prefer `score_paper_quote` for paper-reference
+        quote scoring, which uses a prompt tuned for text-passage equivalence
+        rather than finding equivalence.
         """
         results = self.judge_bulk(
             text_a, [JudgeCandidate(gt_id="_pair", text=text_b)]
@@ -183,6 +220,34 @@ class LLMJudgeSimilarity(SimilarityBackend):
         if not results:
             return 0.0
         return (results[0].match_score - 1) / 4.0
+
+    def score_paper_quote(self, agent_quote: str, gt_quote: str) -> float:
+        """Rate whether two paper excerpts reference the same passage/claim.
+
+        Uses a dedicated system prompt anchored on text-passage equivalence
+        (see _PAPER_QUOTE_SYSTEM_PROMPT). Returns a float in [0, 1] via the
+        same 1..5 -> (score - 1) / 4 mapping as `score()`. Results are cached
+        separately from the finding-matching judgments so the two prompt
+        modes never cross-contaminate.
+        """
+        key = "quote:" + hashlib.sha256(
+            (agent_quote + "|" + gt_quote).encode("utf-8")
+        ).hexdigest()
+        if key in self._quote_cache:
+            return self._quote_cache[key]
+
+        candidates = [JudgeCandidate(gt_id="_pair", text=gt_quote)]
+        user_prompt = _build_user_prompt(agent_quote, candidates)
+        raw = self.provider.chat_json(
+            system=_PAPER_QUOTE_SYSTEM_PROMPT,
+            user=user_prompt,
+            schema=JUDGE_SCHEMA,
+            schema_name="zkml_paper_quote",
+        )
+        results = _parse_judge_response(raw, candidates)
+        value = (results[0].match_score - 1) / 4.0 if results else 0.0
+        self._quote_cache[key] = value
+        return value
 
     def judge_bulk(
         self, agent_text: str, candidates: Sequence[JudgeCandidate]

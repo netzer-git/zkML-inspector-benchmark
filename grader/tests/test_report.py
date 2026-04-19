@@ -259,6 +259,59 @@ class TestGradeProject:
         expected = 0.4 * pg.f1 + 0.6 * pg.quality
         assert pg.composite == pytest.approx(expected)
 
+    def test_f1_uses_severity_weighted_recall(self, sim):
+        """Composite F1 must weight recall by severity so a Critical miss
+        hurts more than an Info miss."""
+        gt_list = [
+            _gt("T-01", "Critical", severity="Critical"),
+            _gt("T-02", "Info", severity="Info"),
+        ]
+        agent_list = [_agent("Info match", severity="Info")]
+        match_result = MatchResult(
+            matched=[MatchedPair(agent_list[0], gt_list[1], similarity=0.9)],
+            missed_gt=[gt_list[0]], extra_agent=[],
+        )
+        pg = grade_project("test", match_result, sim, gt_list, agent_list)
+        # Plain recall = 1/2 = 0.5; SWR = 1/4 = 0.25
+        assert pg.recall == pytest.approx(0.5)
+        assert pg.severity_weighted_recall == pytest.approx(0.25)
+        # F1 is computed against SWR, not plain recall.
+        expected = (
+            2 * pg.precision * pg.severity_weighted_recall
+            / (pg.precision + pg.severity_weighted_recall)
+        )
+        assert pg.f1 == pytest.approx(expected)
+
+    def test_quality_is_severity_weighted(self, sim):
+        """Per-GT quality contributions are weighted by GT severity."""
+        # Two GTs: Critical gets a low pair score, Info gets a high one.
+        # Quality should be dominated by the Critical (weight 3) vs Info (1).
+        gt_list = [
+            _gt("T-01", "Critical", severity="Critical"),
+            _gt("T-02", "Info", severity="Info"),
+        ]
+        agent_list = [
+            _agent("Critical", severity="Warning"),  # severity mismatch -> low
+            _agent("Info", severity="Info"),          # exact -> high
+        ]
+        match_result = MatchResult(
+            matched=[
+                MatchedPair(agent_list[0], gt_list[0], similarity=0.9),
+                MatchedPair(agent_list[1], gt_list[1], similarity=0.9),
+            ],
+            missed_gt=[], extra_agent=[],
+        )
+        pg = grade_project("test", match_result, sim, gt_list, agent_list)
+        # The Critical pair has a worse pair_score (severity mismatch drags
+        # it down via the severity field); the Info pair is clean. With
+        # severity weights 3:1, quality must fall between them but closer
+        # to the Critical (lower) value.
+        pg_pair_crit = pg.matches[0].pair_score
+        pg_pair_info = pg.matches[1].pair_score
+        assert pg_pair_crit < pg_pair_info  # sanity
+        expected_quality = (3 * pg_pair_crit + 1 * pg_pair_info) / 4
+        assert pg.quality == pytest.approx(expected_quality)
+
     def test_n_to_1_recall_counts_unique_gts(self, sim):
         """2 agents matched to the same GT -> recall is 1/1 (unique GT)."""
         gt_list = [_gt("T-01", "Issue A")]

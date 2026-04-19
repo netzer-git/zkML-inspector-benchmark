@@ -87,6 +87,25 @@ class TestScoreCategory:
         r = score_category("Engineering/Prototype Gap", "Specification Mismatch")
         assert r.score == 0.3
 
+    def test_proximity_uc_sm(self):
+        # "Circuit missing constraints" vs "circuit diverges from paper spec"
+        r = score_category("Under-constrained Circuit", "Specification Mismatch")
+        assert r.score == 0.4
+
+    def test_proximity_ptl_epg(self):
+        # Hardcoded challenges / stub protocols
+        r = score_category("Protocol/Transcript Logic", "Engineering/Prototype Gap")
+        assert r.score == 0.3
+
+    def test_proximity_uc_epg(self):
+        # Empty proof stubs
+        r = score_category("Under-constrained Circuit", "Engineering/Prototype Gap")
+        assert r.score == 0.2
+
+    def test_proximity_nqb_epg(self):
+        r = score_category("Numerical/Quantization Bug", "Engineering/Prototype Gap")
+        assert r.score == 0.2
+
     def test_no_proximity_unrelated(self):
         r = score_category("Protocol/Transcript Logic", "Numerical/Quantization Bug")
         assert r.score == 0.0
@@ -168,6 +187,27 @@ class TestScoreCodeLocation:
         agent = [CodeRef("verifier.rs", 39, 39)]
         r = score_code_location(agent, gt)
         assert r.score == 1.0
+
+    def test_off_by_one_line_scores_as_hit(self):
+        """Agent pointing at the function-signature line next to GT's body range
+        counts as a hit (dist <= 2 -> 1.0)."""
+        gt = [CodeRef("zkrelu.cu", 57, 72)]
+        agent = [CodeRef("zkrelu.cu", 56, 56)]  # dist = 1
+        r = score_code_location(agent, gt)
+        assert r.score == 1.0
+
+    def test_off_by_two_lines_scores_as_hit(self):
+        gt = [CodeRef("zkrelu.cu", 57, 72)]
+        agent = [CodeRef("zkrelu.cu", 74, 74)]  # dist = 2
+        r = score_code_location(agent, gt)
+        assert r.score == 1.0
+
+    def test_three_lines_away_is_close_not_hit(self):
+        """dist=3 falls out of the adjacency window and into the `<=30` band."""
+        gt = [CodeRef("zkrelu.cu", 57, 72)]
+        agent = [CodeRef("zkrelu.cu", 75, 75)]  # dist = 3
+        r = score_code_location(agent, gt)
+        assert r.score == 0.7
 
     def test_within_30_lines(self):
         gt = [CodeRef("file.cu", 50, 60)]
@@ -269,10 +309,53 @@ class TestExtractSectionIds:
         assert "Section 2.3" in ids
         assert "Section 4.3" in ids
         assert "Protocol 1" in ids
+        assert "Step 3" in ids
 
     def test_no_sections(self):
         ids = _extract_section_ids("no sections here at all")
         assert ids == []
+
+    def test_section_symbol(self):
+        ids = _extract_section_ids("\u00a74.2: some text")
+        assert "Section 4.2" in ids
+
+    def test_figure(self):
+        ids = _extract_section_ids("Fig. 5 shows this")
+        assert "Figure 5" in ids
+
+    def test_appendix_letter_only(self):
+        ids = _extract_section_ids("Appendix A, Protocol 1")
+        assert "Appendix A" in ids
+        assert "Protocol 1" in ids
+
+    def test_appendix_letter_dot_digit(self):
+        ids = _extract_section_ids("See Appendix A.2 for details")
+        assert "Appendix A.2" in ids
+
+    def test_definition(self):
+        ids = _extract_section_ids("Def. 2.2 and Definition 3")
+        assert "Definition 2.2" in ids
+        assert "Definition 3" in ids
+
+    def test_step(self):
+        ids = _extract_section_ids("Protocol 1 Step (7)")
+        assert "Protocol 1" in ids
+        assert "Step 7" in ids
+
+    def test_step_no_parens(self):
+        ids = _extract_section_ids("Step 4 of the protocol")
+        assert "Step 4" in ids
+
+    def test_line_singular(self):
+        ids = _extract_section_ids("Protocol 1 Line 2")
+        assert "Line 2" in ids
+
+    def test_line_range_normalises_to_start(self):
+        # Lines 6-7 and Lines 6–7 (en-dash) both capture as "Line 6"
+        ids_hyphen = _extract_section_ids("Lines 6-7")
+        assert "Line 6" in ids_hyphen
+        ids_endash = _extract_section_ids("Lines 6\u20137")
+        assert "Line 6" in ids_endash
 
 
 class TestScorePaperReference:
@@ -340,3 +423,18 @@ class TestScorePaperReference:
             sim,
         )
         assert r.score >= 0.5
+
+    def test_multi_anchor_gt_agent_cites_one(self, sim):
+        """When the GT lists several paper anchors for one finding, citing
+        any *one* valid anchor should score section=1.0 (max, not mean).
+        The quote component is scored independently."""
+        r = score_paper_reference(
+            'Protocol 1: prover commits x and y before challenge',
+            'Protocol 1 (Lines 6-7): commit x, y before challenge; '
+            'Protocol 2 (Line 22): send auxiliary commitments first',
+            sim,
+        )
+        # Section should match Protocol 1 exactly -> section=1.0 under max.
+        # Quote has moderate overlap. Combined >= 0.5.
+        assert r.score >= 0.5
+        assert "section=1.00" in r.detail
