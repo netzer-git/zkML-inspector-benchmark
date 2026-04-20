@@ -34,10 +34,14 @@ DEFAULT_WEIGHTS = {
 _SEVERITY_WEIGHT = {"Critical": 3, "Warning": 2, "Info": 1}
 
 # Per-severity weight used in PRECISION. Rationale: the current dataset
-# focuses on Critical findings; Warning and Info are under-represented, so an
-# agent reporting an extra Warning/Info that isn't in the GT should not be
-# penalized as heavily as an extra Critical would be.
-_PRECISION_SEVERITY_WEIGHT = {"Critical": 1.0, "Warning": 0.5, "Info": 0.1}
+# focuses on Critical findings; Warning is under-represented, so an extra
+# Warning outside the GT should not be penalized as heavily as an extra
+# Critical would be. Info-severity agent findings are typically defensive
+# observations ("X is correctly implemented", "no impact but noted") rather
+# than vulnerability claims — they are excluded from precision entirely
+# (weight 0) so that producing helpful Info notes never hurts an agent's
+# score. Info findings still appear in `extras_by_severity` for transparency.
+_PRECISION_SEVERITY_WEIGHT = {"Critical": 1.0, "Warning": 0.5, "Info": 0.0}
 
 
 def _pair_score_badge(pair_score: float) -> str:
@@ -442,6 +446,7 @@ def _grade_to_dict(report: GradeReport) -> dict:
                         for k, v in m.scores.items()
                     },
                     "pair_score": round(m.pair_score, 4),
+                    "dup_rank": m.dup_rank,
                 }
                 for m in pg.matches
             ],

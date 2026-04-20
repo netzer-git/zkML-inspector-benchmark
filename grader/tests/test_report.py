@@ -217,20 +217,45 @@ class TestGradeProject:
         assert pg.precision == pytest.approx(0.4)
 
     def test_precision_severity_weights(self, sim):
-        """Precision weights Critical=1.0, Warning=0.5, Info=0.1."""
+        """Precision weights Critical=1.0, Warning=0.5, Info=0.0 (excluded).
+
+        Info-severity agent findings are typically defensive observations
+        ("X is correctly implemented"), not vulnerability claims, so they
+        should not drag precision down. Weight 0 means they never enter
+        either side of the fraction.
+        """
         gt_list = [_gt("T-01", "A", severity="Critical")]
         agent_list = [
-            _agent("A", severity="Critical"),     # matched, weight 1.0
-            _agent("extra info", severity="Info"),  # Info extra, weight 0.1
+            _agent("A", severity="Critical"),       # matched, weight 1.0
+            _agent("extra warn", severity="Warning"),  # Warning extra, weight 0.5
+            _agent("extra info", severity="Info"),   # Info extra, weight 0.0
         ]
         match_result = MatchResult(
             matched=[MatchedPair(agent=agent_list[0], gt=gt_list[0], similarity=0.9)],
             missed_gt=[],
-            extra_agent=[agent_list[1]],
+            extra_agent=[agent_list[1], agent_list[2]],
         )
         pg = grade_project("test", match_result, sim, gt_list, agent_list)
-        # weighted_matched=1.0, weighted_total=1.0+0.1=1.1 → 1.0/1.1 ≈ 0.909
-        assert pg.precision == pytest.approx(1.0 / 1.1)
+        # weighted_matched = 1.0 (Critical only)
+        # weighted_total = 1.0 (Critical) + 0.5 (Warning) + 0.0 (Info) = 1.5
+        # precision = 1.0 / 1.5 ≈ 0.667
+        assert pg.precision == pytest.approx(1.0 / 1.5)
+
+    def test_precision_info_extra_does_not_penalize(self, sim):
+        """Adding Info extras to a perfect run should leave precision at 1.0."""
+        gt_list = [_gt("T-01", "A", severity="Critical")]
+        agent_list = [
+            _agent("A", severity="Critical"),  # matched, weight 1.0
+            _agent("info note 1", severity="Info"),  # weight 0.0
+            _agent("info note 2", severity="Info"),  # weight 0.0
+        ]
+        match_result = MatchResult(
+            matched=[MatchedPair(agent=agent_list[0], gt=gt_list[0], similarity=0.9)],
+            missed_gt=[],
+            extra_agent=[agent_list[1], agent_list[2]],
+        )
+        pg = grade_project("test", match_result, sim, gt_list, agent_list)
+        assert pg.precision == pytest.approx(1.0)
 
     def test_severity_weighted_recall(self, sim):
         gt_list = [
