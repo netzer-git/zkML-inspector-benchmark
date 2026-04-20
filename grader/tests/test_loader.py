@@ -79,18 +79,18 @@ class TestParseCodeRefs:
 # ---------------------------------------------------------------------------
 
 class TestLoadGroundTruth:
-    def test_loads_all_projects(self, fictional_xlsx_path, fictional_gt_rows):
-        gt = load_ground_truth(fictional_xlsx_path)
+    def test_loads_all_projects(self, fictional_gt_json_path, fictional_gt_rows):
+        gt = load_ground_truth(fictional_gt_json_path)
         expected_projects = {row["entry-id"].lower() for row in fictional_gt_rows}
         assert set(gt.keys()) == expected_projects
 
-    def test_total_finding_count(self, fictional_xlsx_path, fictional_gt_rows):
-        gt = load_ground_truth(fictional_xlsx_path)
+    def test_total_finding_count(self, fictional_gt_json_path, fictional_gt_rows):
+        gt = load_ground_truth(fictional_gt_json_path)
         total = sum(len(v) for v in gt.values())
         assert total == len(fictional_gt_rows)
 
-    def test_finding_has_all_fields(self, fictional_xlsx_path):
-        gt = load_ground_truth(fictional_xlsx_path)
+    def test_finding_has_all_fields(self, fictional_gt_json_path):
+        gt = load_ground_truth(fictional_gt_json_path)
         first_project = next(iter(gt.values()))
         f = first_project[0]
         assert isinstance(f, GroundTruthFinding)
@@ -102,38 +102,38 @@ class TestLoadGroundTruth:
         assert f.category
         assert f.security_concern
 
-    def test_code_refs_parsed(self, fictional_xlsx_path):
-        gt = load_ground_truth(fictional_xlsx_path)
+    def test_code_refs_parsed(self, fictional_gt_json_path):
+        gt = load_ground_truth(fictional_gt_json_path)
         # alpha-01 has two code refs in the fixture
         alpha_01 = next(f for f in gt["alpha"] if f.issue_id == "alpha-01")
         assert len(alpha_01.relevant_code) == 2
 
-    def test_empty_code_refs(self, fictional_xlsx_path):
-        gt = load_ground_truth(fictional_xlsx_path)
+    def test_empty_code_refs(self, fictional_gt_json_path):
+        gt = load_ground_truth(fictional_gt_json_path)
         # alpha-03 has empty relevant-code in the fixture
         alpha_03 = next(f for f in gt["alpha"] if f.issue_id == "alpha-03")
         assert alpha_03.relevant_code == []
 
-    def test_paper_reference_dash(self, fictional_xlsx_path):
-        gt = load_ground_truth(fictional_xlsx_path)
+    def test_paper_reference_dash(self, fictional_gt_json_path):
+        gt = load_ground_truth(fictional_gt_json_path)
         # alpha-02 has paper_reference = "-" in the fixture
         alpha_02 = next(f for f in gt["alpha"] if f.issue_id == "alpha-02")
         assert alpha_02.paper_reference == "-"
 
-    def test_severity_values(self, fictional_xlsx_path):
-        gt = load_ground_truth(fictional_xlsx_path)
+    def test_severity_values(self, fictional_gt_json_path):
+        gt = load_ground_truth(fictional_gt_json_path)
         all_severities = {f.severity for findings in gt.values() for f in findings}
         assert all_severities <= {"Critical", "Warning", "Info"}
 
-    def test_category_values(self, fictional_xlsx_path):
-        gt = load_ground_truth(fictional_xlsx_path)
+    def test_category_values(self, fictional_gt_json_path):
+        gt = load_ground_truth(fictional_gt_json_path)
         from grader import CATEGORIES
         for findings in gt.values():
             for f in findings:
                 assert f.category in CATEGORIES, f"{f.issue_id}: {f.category}"
 
-    def test_security_concern_values(self, fictional_xlsx_path):
-        gt = load_ground_truth(fictional_xlsx_path)
+    def test_security_concern_values(self, fictional_gt_json_path):
+        gt = load_ground_truth(fictional_gt_json_path)
         from grader import SECURITY_CONCERNS
         for findings in gt.values():
             for f in findings:
@@ -306,3 +306,89 @@ class TestLoadAgentOutput:
         path = _make_agent_json([], tmp_path)
         result = load_agent_output(path)
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# load_ground_truth JSON-specific validation
+# ---------------------------------------------------------------------------
+
+def _make_gt_json(findings: list[dict], tmp_path: Path) -> Path:
+    """Helper to write a temp GT JSON file."""
+    path = tmp_path / "gt.json"
+    path.write_text(json.dumps(findings), encoding="utf-8")
+    return path
+
+
+class TestLoadGroundTruthJSON:
+    def test_not_a_list_raises(self, tmp_path):
+        path = tmp_path / "gt.json"
+        path.write_text('{"not": "a list"}', encoding="utf-8")
+        with pytest.raises(ValueError, match="must be a JSON array"):
+            load_ground_truth(path)
+
+    def test_missing_required_field_raises(self, tmp_path):
+        data = [{"entry-id": "alpha", "issue-name": "Incomplete"}]
+        path = _make_gt_json(data, tmp_path)
+        with pytest.raises(ValueError, match="missing required fields"):
+            load_ground_truth(path)
+
+    def test_invalid_severity_raises(self, tmp_path):
+        data = [
+            {
+                "entry-id": "alpha",
+                "issue-id": "alpha-01",
+                "issue-name": "Bad Severity",
+                "issue-explanation": "Explanation",
+                "severity": "High",
+                "category": "Other",
+                "security-concern": "Other",
+                "relevant-code": "",
+                "paper-reference": "-",
+            }
+        ]
+        path = _make_gt_json(data, tmp_path)
+        with pytest.raises(ValueError, match="invalid severity"):
+            load_ground_truth(path)
+
+    def test_issue_id_auto_generated(self, tmp_path):
+        data = [
+            {
+                "entry-id": "alpha",
+                "issue-name": "No ID",
+                "issue-explanation": "Explanation here for the test",
+                "severity": "Critical",
+                "category": "Other",
+                "security-concern": "Other",
+                "relevant-code": "",
+                "paper-reference": "-",
+            }
+        ]
+        path = _make_gt_json(data, tmp_path)
+        gt = load_ground_truth(path)
+        f = gt["alpha"][0]
+        assert f.issue_id == "alpha-01"
+
+    def test_explicit_issue_id_preserved(self, tmp_path):
+        data = [
+            {
+                "entry-id": "alpha",
+                "issue-id": "zkML-001",
+                "issue-name": "With ID",
+                "issue-explanation": "Explanation here for the test",
+                "severity": "Critical",
+                "category": "Other",
+                "security-concern": "Other",
+                "relevant-code": "",
+                "paper-reference": "-",
+            }
+        ]
+        path = _make_gt_json(data, tmp_path)
+        gt = load_ground_truth(path)
+        f = gt["alpha"][0]
+        assert f.issue_id == "zkML-001"
+
+    def test_empty_array_returns_empty(self, tmp_path):
+        path = _make_gt_json([], tmp_path)
+        result = load_ground_truth(path)
+        assert result == {}
+

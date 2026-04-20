@@ -1,4 +1,4 @@
-"""Load ground truth (xlsx) and agent output (JSON), parse and validate."""
+"""Load ground truth (JSON) and agent output (JSON), parse and validate."""
 
 from __future__ import annotations
 
@@ -8,8 +8,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
-
-import openpyxl
 
 from grader import CATEGORIES, SECURITY_CONCERNS, SEVERITIES
 
@@ -101,55 +99,65 @@ def _validate_security_concern(value: str, context: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Ground truth loader (xlsx)
+# Ground truth loader (JSON)
 # ---------------------------------------------------------------------------
 
-_EXPECTED_HEADERS = [
-    "entry-id", "issue-id", "issue-name", "issue-explanation",
-    "severity", "category", "security-concern", "relevant-code", "paper-reference",
-]
+_REQUIRED_GT_FIELDS = {
+    "entry-id", "issue-name", "issue-explanation",
+    "severity", "category", "security-concern",
+    "relevant-code", "paper-reference",
+}
 
 
-def load_ground_truth(xlsx_path: str | Path) -> dict[str, list[GroundTruthFinding]]:
-    """Load ground truth from xlsx. Returns findings grouped by normalized entry_id."""
-    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
-    ws = wb.active
+def load_ground_truth(json_path: str | Path) -> dict[str, list[GroundTruthFinding]]:
+    """Load ground truth from a flat JSON array.
 
-    headers = [str(cell.value).strip().lower() for cell in next(ws.iter_rows(max_row=1))]
-    for expected in _EXPECTED_HEADERS:
-        if expected not in headers:
-            raise ValueError(f"Missing expected column '{expected}' in xlsx. Found: {headers}")
+    Returns findings grouped by normalized entry_id. Each object must have
+    the 8 required fields plus an optional ``issue-id``. If ``issue-id`` is
+    absent it is synthesized as ``{entry-id}-{index}``.
+    """
+    with open(json_path, encoding="utf-8") as f:
+        data = json.load(f)
 
-    col_idx = {h: i for i, h in enumerate(headers)}
+    if not isinstance(data, list):
+        raise ValueError("Ground truth must be a JSON array of finding objects")
+
     result: dict[str, list[GroundTruthFinding]] = defaultdict(list)
+    _entry_counters: dict[str, int] = defaultdict(int)
 
-    for row_num, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-        entry_id_raw = row[col_idx["entry-id"]]
-        if entry_id_raw is None:
-            continue
+    for i, obj in enumerate(data):
+        if not isinstance(obj, dict):
+            raise ValueError(f"GT finding #{i}: expected object, got {type(obj).__name__}")
 
-        entry_id = str(entry_id_raw).strip()
-        issue_id = str(row[col_idx["issue-id"]] or "").strip()
-        context = f"Row {row_num} ({issue_id or entry_id})"
+        missing = _REQUIRED_GT_FIELDS - set(obj.keys())
+        if missing:
+            raise ValueError(f"GT finding #{i}: missing required fields: {missing}")
 
-        severity_raw = str(row[col_idx["severity"]] or "").strip()
-        category_raw = str(row[col_idx["category"]] or "").strip()
-        concern_raw = str(row[col_idx["security-concern"]] or "").strip()
+        entry_id_raw = str(obj["entry-id"]).strip()
+        issue_id = str(obj.get("issue-id", "")).strip()
+        if not issue_id:
+            _entry_counters[entry_id_raw] += 1
+            issue_id = f"{entry_id_raw}-{_entry_counters[entry_id_raw]:02d}"
+
+        context = f"GT finding #{i} ({issue_id or entry_id_raw})"
+
+        severity_raw = str(obj["severity"]).strip()
+        category_raw = str(obj["category"]).strip()
+        concern_raw = str(obj["security-concern"]).strip()
 
         finding = GroundTruthFinding(
-            entry_id=entry_id,
+            entry_id=entry_id_raw,
             issue_id=issue_id,
-            issue_name=str(row[col_idx["issue-name"]] or "").strip(),
-            issue_explanation=str(row[col_idx["issue-explanation"]] or "").strip(),
+            issue_name=str(obj["issue-name"]).strip(),
+            issue_explanation=str(obj["issue-explanation"]).strip(),
             severity=_validate_severity(severity_raw, context),
             category=_validate_category(category_raw, context),
             security_concern=_validate_security_concern(concern_raw, context),
-            relevant_code=parse_code_refs(str(row[col_idx["relevant-code"]] or "")),
-            paper_reference=str(row[col_idx["paper-reference"]] or "").strip(),
+            relevant_code=parse_code_refs(str(obj.get("relevant-code", "") or "")),
+            paper_reference=str(obj.get("paper-reference", "") or "").strip(),
         )
-        result[_normalize_entry_id(entry_id)].append(finding)
+        result[_normalize_entry_id(entry_id_raw)].append(finding)
 
-    wb.close()
     return dict(result)
 
 
