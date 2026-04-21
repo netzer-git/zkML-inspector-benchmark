@@ -6,7 +6,7 @@ Materializes a runnable (paper, codebase) layout from a ground-truth dataset, so
 
 ```bash
 python -m dataset_loader \
-    --dataset zkMLDataset.xlsx \
+    --dataset findings.json \
     --manifest sources.json \
     --output ./run_set/
 ```

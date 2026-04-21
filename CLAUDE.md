@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repo purpose
 
-Benchmark suite for ZK-ML audit agents. Three components are intended to work together end-to-end: `dataset_generator/` curates the ground-truth audit-finding dataset, `dataset_loader/` materializes (paper PDF, codebase) pairs for an agent run, and `grader/` scores the agent's JSON output against the ground truth. **Only `grader/` is implemented today** — the other two are placeholder folders with READMEs describing the planned interface.
+Benchmark suite for ZK-ML audit agents. Three components work together end-to-end: `dataset_generator/` produces benchmark cases by applying bug artifacts to fixed codebases and emitting ground-truth findings JSON, `dataset_loader/` materializes (paper PDF, codebase) pairs for an agent run, and `grader/` scores the agent's JSON output against the ground truth.
 
 ## Common commands
 
@@ -19,7 +19,7 @@ python -m pytest grader/tests/test_scorers.py::TestScoreSeverity::test_exact_cri
 
 # Run the grader end-to-end (requires .env with an API key — see .env.example)
 python -m grader \
-    --ground-truth zkMLDataset.xlsx \
+    --ground-truth findings.json \
     --agent-output agent_results.json \
     --output grade_report.json \
     --output-md grade_report.md
@@ -29,7 +29,7 @@ python -m grader \
 
 ## Test fixtures
 
-`grader/tests/conftest.py` builds fictional ground-truth (xlsx) and agent-output (JSON) fixtures at session start using synthetic project names (`alpha`, `beta`). **No real dataset content is ever in tests** — deliberately, to avoid leaking ground-truth to anything that reads the test suite. All tests are self-contained; none skip. LLM tests use `MockLLMProvider` from `grader.llm` (no API is ever contacted).
+`grader/tests/conftest.py` builds fictional ground-truth (JSON) and agent-output (JSON) fixtures at session start using synthetic project names (`alpha`, `beta`). **No real dataset content is ever in tests** — deliberately, to avoid leaking ground-truth to anything that reads the test suite. All tests are self-contained; none skip. LLM tests use `MockLLMProvider` from `grader.llm` (no API is ever contacted).
 
 ## Example agent output
 
@@ -40,7 +40,7 @@ python -m grader \
 ### Grader pipeline
 
 ```
-xlsx GT     ─┐
+GT JSON     ─┐
              ├─► loader ─► dict[entry_id, list[Finding]] ─┐
 agent JSON  ─┘                                            ├─► matcher (per-project)
                                                           │     ├─► matched pairs
@@ -56,7 +56,7 @@ agent JSON  ─┘                                            ├─► matcher 
 
 Module responsibilities:
 
-- **`grader/loader.py`** — parses the xlsx (ground truth) and the agent JSON. Both must include all 7 fields (severity, category, security-concern, relevant-code, paper-reference, issue-name, issue-explanation). `parse_code_refs` handles the `file:line[-line], file:line` format including unicode en-dashes. Entry IDs are normalized to lowercase as the grouping key. Validation is strict: invalid closed-list values raise `ValueError`.
+- **`grader/loader.py`** — parses the ground-truth JSON and the agent JSON. Both are flat JSON arrays; each finding must include all 7 fields (severity, category, security-concern, relevant-code, paper-reference, issue-name, issue-explanation). Ground-truth findings also carry an `issue-id` field (auto-generated if absent). `parse_code_refs` handles the `file:line[-line], file:line` format including unicode en-dashes. Entry IDs are normalized to lowercase as the grouping key. Validation is strict: invalid closed-list values raise `ValueError`.
 
 - **`grader/similarity.py`** — `SimilarityBackend` ABC plus one production backend: `LLMJudgeSimilarity`. Exposes `judge_bulk(agent_text, candidates)` — the primary matching API, one LLM call returns a ranked list of per-candidate judgments `{gt_id, match_score, same_root_cause, reasoning}` — and `score(a, b)` for single-pair text similarity (used by paper-reference quote scoring). `JUDGE_SCHEMA` is strict and used verbatim by both OpenAI `response_format=json_schema` and Anthropic tool-use. Results are cached in-memory by SHA-256 of agent + sorted candidates. The richer per-pair judgment (beyond `match_score`) is reachable via `last_result_for(agent_text, gt_id)` for future report enrichment — it is collected today but not yet written into the report.
 

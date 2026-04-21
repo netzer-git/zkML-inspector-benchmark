@@ -1,14 +1,37 @@
-# dataset_generator (planned)
+# dataset_generator
 
-Tools for assembling and validating new ground-truth audit-finding datasets.
+Generates benchmark cases by applying strict-v2 bug artifacts to fixed codebases and emitting ground-truth findings JSON.
 
-## Planned scope
+## Usage
 
-- **Schema validation** — verify that an xlsx conforms to the dataset schema (columns, closed-list values, code-ref format).
-- **Curation helpers** — interactive prompts for adding new findings, with closed-list validation and ID auto-assignment.
-- **Candidate proposal** — pipelines that scan an existing audit report and propose candidate finding entries (severity, category, code refs) for human review.
-- **Export** — write the curated dataset back to xlsx in the canonical column order.
+```bash
+python -m dataset_generator test \
+  --sources ./sources/ \
+  --output ./dataset/ \
+  --num-cases 2 \
+  --artifacts-per-case 3 \
+  --strategy random \
+  --seed 42
+```
 
-## Status
+## Sources layout (placeholder — subject to change)
 
-Not yet implemented.
+```
+sources/
+  sources.json            # [{entry-id, paper, codebase_zip, codebase_name}]
+  papers/*.pdf
+  codebases/*.zip
+  artifacts/<codebase_name>/*.json   # strict v2 artifacts
+```
+
+## Output
+
+```
+output/
+  dataset_manifest.json   # case metadata (strategy, seed, case list)
+  findings.json           # aggregated ground-truth (flat array, grader-compatible)
+  cases/<entry-id>/
+    paper.pdf
+    codebase/             # modified codebase with injected bugs
+    case.json             # per-case metadata (artifact_ids, source_codebase)
+```

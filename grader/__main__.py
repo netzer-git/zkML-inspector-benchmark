@@ -1,4 +1,4 @@
-"""Allow running grader as `python -m grader`."""
+"""Allow running with `python -m grader`."""
 from grader.cli import main
 
 main()

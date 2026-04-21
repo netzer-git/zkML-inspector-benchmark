@@ -65,7 +65,7 @@ class TestParseCodeRefs:
         assert parse_code_refs("None") == []
 
     def test_unicode_dash_in_range(self):
-        # Real xlsx files sometimes use en-dash (–) in ranges
+        # Real data files sometimes use en-dash (–) in ranges
         refs = parse_code_refs("widget.rs:267–370")
         assert refs == [CodeRef("widget.rs", 267, 370)]
 
@@ -75,7 +75,7 @@ class TestParseCodeRefs:
 
 
 # ---------------------------------------------------------------------------
-# load_ground_truth (uses synthetic xlsx fixture from conftest.py)
+# load_ground_truth (uses synthetic JSON fixture from conftest.py)
 # ---------------------------------------------------------------------------
 
 class TestLoadGroundTruth:

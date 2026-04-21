@@ -374,7 +374,7 @@ class TestPerProjectErrorIsolation:
         self, tmp_path, fictional_gt_json_path, reset_override,
     ):
         """Agent findings for projects not in GT land in skipped_projects."""
-        # Agent has a finding for a project the GT xlsx doesn't contain
+        # Agent has a finding for a project the GT JSON doesn't contain
         agent_path = tmp_path / "agent.json"
         agent_path.write_text(json.dumps([{
             "entry-id": "gamma",  # not in fictional GT

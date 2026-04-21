@@ -36,6 +36,4 @@ grade_report.md
 judge_trace.md
 
 # Local datasets / agent outputs (users supply their own)
-*.xlsx
-!grader/tests/fixtures/*.xlsx
 agent_results.json

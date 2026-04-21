@@ -13,7 +13,7 @@ authors = [
     { name = "zkML-inspector-benchmark contributors" }
 ]
 dependencies = [
-    "openpyxl>=3.1",
+    "jsonschema>=4.0",
     "numpy>=1.24",
     "openai>=1.0",
     "anthropic>=0.20",
@@ -27,11 +27,12 @@ dev = [
 
 [project.scripts]
 zkml-grader = "grader.cli:main"
+zkml-dataset-gen = "dataset_generator.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["grader*", "dataset_loader*", "dataset_generator*"]
 exclude = ["*.tests", "*.tests.*", "tests.*", "tests"]
 
 [tool.pytest.ini_options]
-testpaths = ["grader/tests"]
+testpaths = ["grader/tests", "dataset_generator/tests"]
 python_files = ["test_*.py"]

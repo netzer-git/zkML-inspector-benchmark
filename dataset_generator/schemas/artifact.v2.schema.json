@@ -1,0 +1,300 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zkpdb.local/schemas/artifact.v2.schema.json",
+  "title": "CTF Bug Artifact (v2)",
+  "description": "Revised schema for a single declarative bug artifact. Changes from v1: name/category/severity/notes removed from root; source simplified to string; location renamed to relevant_code and moved to labels.",
+  "type": "object",
+  "required": [
+    "artifact_id",
+    "codebase",
+    "source",
+    "finding",
+    "edits",
+    "conflict_keys",
+    "presence_probes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "artifact_id": {
+      "type": "string",
+      "pattern": "^(zkML|zkTorch|zkLLM|zkGPT)-\\d{3}$",
+      "description": "Unique ID. Prefix encodes codebase: zkML, zkTorch, zkLLM, zkGPT."
+    },
+    "codebase": {
+      "type": "string",
+      "enum": ["zkml-fixed", "zk-torch-fixed", "zkllm-ccs2024-fixed", "zkTransformer-main-fixed"],
+      "description": "Target codebase directory name under Codebases/."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["real", "synthetic"],
+      "description": "Whether this artifact is derived from a real audit finding or synthetically authored."
+    },
+    "finding": {
+      "type": "object",
+      "required": ["name", "explanation", "labels"],
+      "additionalProperties": false,
+      "description": "Ground-truth finding for benchmark scoring.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 120,
+          "description": "Human-readable short name of the bug (3-7 words)."
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 20,
+          "description": "One paragraph describing root cause and impact."
+        },
+        "labels": {
+          "type": "object",
+          "required": ["severity", "category", "security_concern", "relevant_code", "paper_reference"],
+          "additionalProperties": false,
+          "description": "Grader-aligned labels for benchmark scoring.",
+          "properties": {
+            "severity": {
+              "type": "string",
+              "enum": ["Critical", "Warning", "Info"],
+              "description": "Critical = malicious prover can forge; Warning = weakens paper guarantees; Info = minor deviation."
+            },
+            "category": {
+              "type": "string",
+              "enum": [
+                "Under-constrained Circuit",
+                "Protocol/Transcript Logic",
+                "Specification Mismatch",
+                "Numerical/Quantization Bug",
+                "Witness/Commitment Mismatch",
+                "Engineering/Prototype Gap",
+                "Other"
+              ],
+              "description": "Where exactly did the implementation go wrong?"
+            },
+            "security_concern": {
+              "type": "string",
+              "enum": [
+                "Proof Forgery (Soundness)",
+                "Information Leakage (Privacy)",
+                "Semantic Subversion (Integrity)",
+                "Proof Malleability",
+                "Denial of Proof (Reliability)",
+                "Governance Bypass",
+                "Other"
+              ],
+              "description": "If an attacker exploits this, what happens to the system's trust assumptions?"
+            },
+            "relevant_code": {
+              "type": "string",
+              "description": "Comma-separated file:line references (e.g., 'src/model.rs:210, src/gadgets/var_div.rs:62-82'). Empty string if no specific code location."
+            },
+            "paper_reference": {
+              "type": "string",
+              "description": "Section/theorem/protocol citation from the paper with optional quoted claim, or '-' if none applies."
+            }
+          }
+        }
+      }
+    },
+    "edits": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/edit" },
+      "description": "Ordered list of code edits to inject this bug."
+    },
+    "conflict_keys": {
+      "type": "object",
+      "required": ["files", "regions", "semantic_tags"],
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "All files touched by this artifact's edits."
+        },
+        "regions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/region" },
+          "description": "Expanded line-range regions for overlap detection."
+        },
+        "semantic_tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "Semantic labels; two artifacts sharing a tag conflict."
+        },
+        "requires": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^(zkML|zkTorch|zkLLM|zkGPT)-\\d{3}$" },
+          "description": "Artifact IDs this artifact depends on (applied first)."
+        },
+        "incompatible": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^(zkML|zkTorch|zkLLM|zkGPT)-\\d{3}$" },
+          "description": "Artifact IDs explicitly incompatible with this one."
+        }
+      }
+    },
+    "presence_probes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/probe" },
+      "description": "Assertions to verify the bug was correctly injected."
+    },
+    "changelog": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["date", "reason"],
+        "properties": {
+          "date": { "type": "string", "format": "date" },
+          "reason": { "type": "string" },
+          "prev_sha256": { "type": "string" }
+        }
+      },
+      "description": "Optional log of updates when the -fixed codebase drifts."
+    }
+  },
+  "$defs": {
+    "edit": {
+      "type": "object",
+      "required": ["file", "op", "anchor"],
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "Path relative to the codebase root."
+        },
+        "op": {
+          "type": "string",
+          "enum": [
+            "replace_block",
+            "insert_after",
+            "insert_before",
+            "delete_block",
+            "replace_regex",
+            "create_file"
+          ]
+        },
+        "anchor": { "$ref": "#/$defs/anchor" },
+        "new_content": {
+          "type": "string",
+          "description": "Verbatim replacement/insertion text (not used for delete_block)."
+        },
+        "regex_pattern": {
+          "type": "string",
+          "description": "Only for op=replace_regex. The regex to match."
+        },
+        "expected_match_count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Only for op=replace_regex. Expected number of matches."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "op": { "enum": ["replace_block", "insert_after", "insert_before", "create_file"] } } },
+          "then": { "required": ["new_content"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "replace_regex" } } },
+          "then": { "required": ["regex_pattern", "new_content"] }
+        }
+      ]
+    },
+    "anchor": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["line_range", "unique_string", "regex", "symbol"]
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Start line (1-based). Used with kind=line_range."
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "End line (1-based, inclusive). Used with kind=line_range."
+        },
+        "expect_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "SHA-256 of the line content in the clean codebase."
+        },
+        "text": {
+          "type": "string",
+          "description": "Used with kind=unique_string. Must match exactly once in the file."
+        },
+        "pattern": {
+          "type": "string",
+          "description": "Used with kind=regex."
+        },
+        "match_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Used with kind=regex. 0-based index of which match to use."
+        },
+        "symbol_name": {
+          "type": "string",
+          "description": "Used with kind=symbol. Documentation-only, not enforced."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "line_range" } } },
+          "then": { "required": ["start", "end"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "unique_string" } } },
+          "then": { "required": ["text"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "regex" } } },
+          "then": { "required": ["pattern"] }
+        }
+      ]
+    },
+    "region": {
+      "type": "object",
+      "required": ["file", "start", "end"],
+      "properties": {
+        "file": { "type": "string" },
+        "start": { "type": "integer", "minimum": 1 },
+        "end": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "required": ["kind", "file"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["contains", "not_contains", "line_equals"]
+        },
+        "file": { "type": "string" },
+        "text": {
+          "type": "string",
+          "description": "Substring to search for (contains/not_contains) or exact line content (line_equals)."
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based line number. Required for kind=line_equals."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "enum": ["contains", "not_contains"] } } },
+          "then": { "required": ["text"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "line_equals" } } },
+          "then": { "required": ["line", "text"] }
+        }
+      ]
+    }
+  }
+}
