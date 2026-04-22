@@ -541,34 +541,33 @@ class TestArtifactValidation:
 # ---------------------------------------------------------------------------
 
 class TestSources:
-    def test_missing_sources_json_raises(self, tmp_path):
-        from dataset_generator.sources import load_sources
-        with pytest.raises(FileNotFoundError, match="sources.json"):
-            load_sources(tmp_path)
-
     def test_unknown_entry_id_raises(self, tmp_path):
-        from dataset_generator.sources import load_sources
-        (tmp_path / "sources.json").write_text("[]", encoding="utf-8")
-        sources = load_sources(tmp_path)
+        from dataset_generator.sources import Sources
+        from dataset_loader import BenchmarkDataset
+
+        # Empty manifest → no pairs
+        ds = BenchmarkDataset.__new__(BenchmarkDataset)
+        ds._repo_id = "test/repo"
+        ds._revision = None
+        ds._manifest = {"total_files": 0, "files": []}
+        ds._pairs_cache = None
+
+        sources = Sources(ds)
         with pytest.raises(KeyError, match="nonexistent"):
             sources.get_entry("nonexistent")
 
-    def test_missing_paper_raises(self, tmp_path):
-        from dataset_generator.sources import load_sources
-        manifest = [{"entry-id": "p1", "paper": "papers/x.pdf",
-                      "codebase_zip": "cb.zip", "codebase_name": "cb"}]
-        (tmp_path / "sources.json").write_text(
-            json.dumps(manifest), encoding="utf-8"
-        )
-        sources = load_sources(tmp_path)
-        with pytest.raises(FileNotFoundError, match="Paper not found"):
-            sources.get_paper_path("p1")
-
     def test_empty_artifact_pool(self, tmp_path):
-        from dataset_generator.sources import load_sources
-        (tmp_path / "sources.json").write_text("[]", encoding="utf-8")
-        sources = load_sources(tmp_path)
-        assert sources.get_artifact_pool("nonexistent-codebase") == []
+        from dataset_generator.sources import Sources
+        from dataset_loader import BenchmarkDataset
+
+        ds = BenchmarkDataset.__new__(BenchmarkDataset)
+        ds._repo_id = "test/repo"
+        ds._revision = None
+        ds._manifest = {"total_files": 0, "files": []}
+        ds._pairs_cache = None
+
+        sources = Sources(ds)
+        assert sources.get_artifact_pool("nonexistent") == []
 
 
 # ---------------------------------------------------------------------------
@@ -638,3 +637,141 @@ class TestAssembler:
                 artifacts=[artifact],
                 output_dir=tmp_path / "out",
             )
+
+    def test_line_offset_across_artifacts(self, tmp_path):
+        """Two artifacts edit the same file at non-overlapping ranges.
+
+        The first artifact changes the line count, which should NOT break
+        the second artifact's anchor thanks to offset tracking.
+        """
+        from dataset_generator.assembler import build_case
+
+        codebase_dir = tmp_path / "cb"
+        codebase_dir.mkdir()
+        (codebase_dir / "src").mkdir()
+
+        # 10-line file
+        lines = [f"line{i}" for i in range(1, 11)]
+        (codebase_dir / "src" / "f.rs").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+
+        sha_l2_l3 = _sha256("line2\nline3\n")  # L2-L3
+        sha_l8 = _sha256("line8\n")  # L8
+
+        # Artifact A: replace L2-L3 (2 lines) with 1 line → delta=-1
+        a = _make_artifact(
+            "zkML-001",
+            edits=[{
+                "file": "src/f.rs",
+                "op": "replace_block",
+                "anchor": {"kind": "line_range", "start": 2, "end": 3,
+                           "expect_sha256": sha_l2_l3},
+                "new_content": "REPLACED_A",
+            }],
+            regions=[{"file": "src/f.rs", "start": 1, "end": 4}],
+            probes=[{"kind": "contains", "file": "src/f.rs", "text": "REPLACED_A"}],
+        )
+
+        # Artifact B: replace L8 (1 line) with 1 line → delta=0
+        # Without offset tracking, L8 would be wrong after A removes a line.
+        b = _make_artifact(
+            "zkML-002",
+            edits=[{
+                "file": "src/f.rs",
+                "op": "replace_block",
+                "anchor": {"kind": "line_range", "start": 8, "end": 8,
+                           "expect_sha256": sha_l8},
+                "new_content": "REPLACED_B",
+            }],
+            regions=[{"file": "src/f.rs", "start": 7, "end": 9}],
+            probes=[{"kind": "contains", "file": "src/f.rs", "text": "REPLACED_B"}],
+        )
+
+        case = build_case(
+            entry_id="offset-test",
+            codebase_dir=codebase_dir,
+            codebase_name="cb",
+            paper_path=None,
+            artifacts=[a, b],
+            output_dir=tmp_path / "out",
+        )
+
+        # Both edits should have been applied
+        result = (case.case_dir / "codebase" / "src" / "f.rs").read_text("utf-8")
+        assert "REPLACED_A" in result
+        assert "REPLACED_B" in result
+        # Original line8 content should be gone
+        assert "line8" not in result
+
+
+# ---------------------------------------------------------------------------
+# Conflict — probe contamination
+# ---------------------------------------------------------------------------
+
+class TestProbeContamination:
+    def test_not_contains_vs_new_content(self):
+        """Two artifacts where B's new_content introduces text that
+        violates A's not_contains probe should be detected as a conflict."""
+        a = _make_artifact(
+            "zkML-001",
+            edits=[{
+                "file": "src/test.rs",
+                "op": "replace_block",
+                "anchor": {"kind": "line_range", "start": 1, "end": 1},
+                "new_content": "safe_content",
+            }],
+            regions=[{"file": "src/test.rs", "start": 1, "end": 3}],
+            probes=[
+                {"kind": "contains", "file": "src/test.rs", "text": "safe_content"},
+                {"kind": "not_contains", "file": "src/test.rs", "text": "FORBIDDEN"},
+            ],
+        )
+
+        b = _make_artifact(
+            "zkML-002",
+            edits=[{
+                "file": "src/test.rs",
+                "op": "replace_block",
+                "anchor": {"kind": "line_range", "start": 5, "end": 5},
+                "new_content": "this has FORBIDDEN text",
+            }],
+            regions=[{"file": "src/test.rs", "start": 5, "end": 7}],
+            probes=[{"kind": "contains", "file": "src/test.rs", "text": "FORBIDDEN"}],
+        )
+
+        conflicts = detect_conflicts([a, b])
+        reasons = [c.reason for c in conflicts]
+        assert any("not_contains" in r for r in reasons)
+
+    def test_no_false_positive_different_file(self):
+        """not_contains on file X should not conflict with new_content on file Y."""
+        a = _make_artifact(
+            "zkML-001",
+            edits=[{
+                "file": "src/a.rs",
+                "op": "replace_block",
+                "anchor": {"kind": "line_range", "start": 1, "end": 1},
+                "new_content": "ok",
+            }],
+            regions=[{"file": "src/a.rs", "start": 1, "end": 3}],
+            probes=[
+                {"kind": "not_contains", "file": "src/a.rs", "text": "FORBIDDEN"},
+            ],
+        )
+
+        b = _make_artifact(
+            "zkML-002",
+            edits=[{
+                "file": "src/b.rs",
+                "op": "replace_block",
+                "anchor": {"kind": "line_range", "start": 1, "end": 1},
+                "new_content": "FORBIDDEN content here",
+            }],
+            regions=[{"file": "src/b.rs", "start": 1, "end": 3}],
+            probes=[{"kind": "contains", "file": "src/b.rs", "text": "FORBIDDEN"}],
+        )
+
+        conflicts = detect_conflicts([a, b])
+        probe_conflicts = [c for c in conflicts if "not_contains" in c.reason]
+        assert len(probe_conflicts) == 0

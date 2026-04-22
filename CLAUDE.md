@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repo purpose
 
-Benchmark suite for ZK-ML audit agents. Three components work together end-to-end: `dataset_generator/` produces benchmark cases by applying bug artifacts to fixed codebases and emitting ground-truth findings JSON, `dataset_loader/` materializes (paper PDF, codebase) pairs for an agent run, and `grader/` scores the agent's JSON output against the ground truth.
+Benchmark suite for ZK-ML audit agents. Three components work together end-to-end: `dataset_loader/` downloads papers, codebases, and artifacts from the [`Netzerep/zkml-audit-benchmark`](https://huggingface.co/datasets/Netzerep/zkml-audit-benchmark) HF dataset and materializes (paper PDF, codebase) pairs for agent runs; `dataset_generator/` produces benchmark cases by applying bug artifacts to the clean codebases and emitting ground-truth findings JSON; and `grader/` scores the agent's JSON output against the ground truth.
 
 ## Common commands
 
@@ -23,9 +23,20 @@ python -m grader \
     --agent-output agent_results.json \
     --output grade_report.json \
     --output-md grade_report.md
+
+# Materialize a run-set from HF for agent auditing
+python -m dataset_loader materialize --output ./run_set
+python -m dataset_loader materialize --output ./run_set --pairs zkllm,zkml
+
+# List available pairs / artifacts
+python -m dataset_loader list-pairs
+python -m dataset_loader list-artifacts --pair zkllm
+
+# Generate benchmark test cases (downloads sources from HF)
+python -m dataset_generator test --output ./dataset/ --num-cases 2 --artifacts-per-case 3
 ```
 
-`pyproject.toml` exposes the grader as a `zkml-grader` console script after `pip install -e .`. The grader makes real LLM calls (OpenAI by default) to match agent findings against ground truth — tests use `MockLLMProvider` to avoid any API traffic.
+`pyproject.toml` exposes three console scripts after `pip install -e .`: `zkml-grader`, `zkml-dataset-gen`, and `zkml-loader`. The grader makes real LLM calls (OpenAI by default) to match agent findings against ground truth — tests use `MockLLMProvider` to avoid any API traffic. The loader and generator use `huggingface_hub` to download dataset files (cached locally after first download).
 
 ## Test fixtures
 

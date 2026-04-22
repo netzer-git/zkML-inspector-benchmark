@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zkpdb.local/schemas/artifact.v2.schema.json",
   "title": "CTF Bug Artifact (v2)",
-  "description": "Revised schema for a single declarative bug artifact. Changes from v1: name/category/severity/notes removed from root; source simplified to string; location renamed to relevant_code and moved to labels.",
+  "description": "Schema for a single declarative bug artifact.",
   "type": "object",
   "required": [
     "artifact_id",

@@ -37,3 +37,7 @@ judge_trace.md
 
 # Local datasets / agent outputs (users supply their own)
 agent_results.json
+
+# Dataset generation / loader output
+test_generation/
+run_set/

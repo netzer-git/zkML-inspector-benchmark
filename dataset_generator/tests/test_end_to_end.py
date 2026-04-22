@@ -1,47 +1,45 @@
 """End-to-end smoke test for the dataset generator.
 
-Builds a minimal sources tree in tmp_path, runs the generator, and validates
-that the output is correct and the grader can consume the findings.
+Builds mock HF fixtures in tmp_path, patches load_sources, runs the generator,
+and validates that the output is correct and the grader can consume the findings.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from dataset_generator.cli import main as gen_main
+from dataset_generator.sources import Sources
+from dataset_loader import BenchmarkDataset, PairInfo
 from grader.loader import load_ground_truth
 
 
-def _build_sources(tmp_path: Path) -> Path:
-    """Build a minimal sources directory for testing."""
-    sources_dir = tmp_path / "sources"
-    sources_dir.mkdir()
+def _build_hf_fixtures(tmp_path: Path) -> tuple[BenchmarkDataset, Path]:
+    """Build mock HF-like fixtures and return a pre-wired BenchmarkDataset.
 
-    # Paper (just a text file pretending to be a PDF)
-    papers_dir = sources_dir / "papers"
-    papers_dir.mkdir()
-    paper = papers_dir / "test_paper.pdf"
-    paper.write_text("Fake paper content for testing", encoding="utf-8")
+    Returns (dataset, artifacts_dir) so tests can verify artifact files exist.
+    """
+    root = tmp_path / "hf_cache"
+    root.mkdir()
+
+    # Paper
+    paper_path = root / "test_paper.pdf"
+    paper_path.write_text("Fake paper content for testing", encoding="utf-8")
 
     # Codebase zip
-    codebases_dir = sources_dir / "codebases"
-    codebases_dir.mkdir()
-    zip_path = codebases_dir / "test-codebase.zip"
-
+    zip_path = root / "test_codebase.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:
-        zf.writestr("test-codebase/src/main.rs", "fn main() {\n    println!(\"hello\");\n}\n")
-        zf.writestr("test-codebase/src/lib.rs", "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n")
-        zf.writestr("test-codebase/Cargo.toml", "[package]\nname = \"test\"\nversion = \"0.1.0\"\n")
+        zf.writestr("src/main.rs", "fn main() {\n    println!(\"hello\");\n}\n")
+        zf.writestr("src/lib.rs", "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n")
+        zf.writestr("Cargo.toml", "[package]\nname = \"test\"\nversion = \"0.1.0\"\n")
 
-    # Artifacts — two non-conflicting artifacts targeting different files
-    artifacts_dir = sources_dir / "artifacts" / "test-codebase"
-    artifacts_dir.mkdir(parents=True)
-
-    import hashlib
+    # Artifacts
     main_line1 = "fn main() {\n"
     main_sha = hashlib.sha256(main_line1.encode("utf-8")).hexdigest()
 
@@ -115,6 +113,8 @@ def _build_sources(tmp_path: Path) -> Path:
         ],
     }
 
+    artifacts_dir = root / "artifacts"
+    artifacts_dir.mkdir()
     (artifacts_dir / "zkML-001.json").write_text(
         json.dumps(artifact1, indent=2), encoding="utf-8"
     )
@@ -122,36 +122,54 @@ def _build_sources(tmp_path: Path) -> Path:
         json.dumps(artifact2, indent=2), encoding="utf-8"
     )
 
-    # sources.json
-    sources_json = [
-        {
-            "entry-id": "test-project",
-            "paper": "papers/test_paper.pdf",
-            "codebase_zip": "codebases/test-codebase.zip",
-            "codebase_name": "test-codebase",
-        }
-    ]
-    (sources_dir / "sources.json").write_text(
-        json.dumps(sources_json, indent=2), encoding="utf-8"
-    )
+    # Build a BenchmarkDataset with mocked internals
+    manifest = {
+        "total_files": 4,
+        "files": [
+            {"path": "papers/zkml.pdf", "sha256": "a" * 64, "size": 100},
+            {"path": "codebases/zkml.zip", "sha256": "b" * 64, "size": 200},
+            {"path": "artifacts/zkml/zkML-001.json", "sha256": "c" * 64, "size": 50},
+            {"path": "artifacts/zkml/zkML-002.json", "sha256": "d" * 64, "size": 50},
+        ],
+    }
 
-    return sources_dir
+    # Map repo paths to local fixture files
+    path_map = {
+        "papers/zkml.pdf": paper_path,
+        "codebases/zkml.zip": zip_path,
+        "artifacts/zkml/zkML-001.json": artifacts_dir / "zkML-001.json",
+        "artifacts/zkml/zkML-002.json": artifacts_dir / "zkML-002.json",
+    }
+
+    ds = BenchmarkDataset.__new__(BenchmarkDataset)
+    ds._repo_id = "test/repo"
+    ds._revision = None
+    ds._manifest = manifest
+    ds._pairs_cache = None
+    ds._download = lambda repo_path: path_map[repo_path]
+
+    return ds, artifacts_dir
+
+
+def _make_patched_sources(ds: BenchmarkDataset) -> Sources:
+    """Create a Sources instance backed by the mock dataset."""
+    return Sources(ds)
 
 
 class TestEndToEnd:
     def test_generate_single_case(self, tmp_path):
-        sources_dir = _build_sources(tmp_path)
+        ds, _ = _build_hf_fixtures(tmp_path)
         output_dir = tmp_path / "output"
 
-        gen_main([
-            "test",
-            "--sources", str(sources_dir),
-            "--output", str(output_dir),
-            "--num-cases", "1",
-            "--artifacts-per-case", "2",
-            "--strategy", "random",
-            "--seed", "42",
-        ])
+        with patch("dataset_generator.cli.load_sources", return_value=_make_patched_sources(ds)):
+            gen_main([
+                "test",
+                "--output", str(output_dir),
+                "--num-cases", "1",
+                "--artifacts-per-case", "2",
+                "--strategy", "random",
+                "--seed", "42",
+            ])
 
         # Verify outputs exist
         assert (output_dir / "dataset_manifest.json").exists()
@@ -171,7 +189,7 @@ class TestEndToEnd:
             (output_dir / "findings.json").read_text(encoding="utf-8")
         )
         assert len(findings) == 2  # 2 artifacts applied
-        assert all(f["entry-id"] == "test-project" for f in findings)
+        assert all(f["entry-id"] == "zkml" for f in findings)
         assert {f["issue-id"] for f in findings} == {"zkML-001", "zkML-002"}
 
         # Verify each finding has all required fields
@@ -184,39 +202,39 @@ class TestEndToEnd:
             assert required_fields <= set(f.keys()), f"Missing fields in {f}"
 
     def test_findings_loadable_by_grader(self, tmp_path):
-        sources_dir = _build_sources(tmp_path)
+        ds, _ = _build_hf_fixtures(tmp_path)
         output_dir = tmp_path / "output"
 
-        gen_main([
-            "test",
-            "--sources", str(sources_dir),
-            "--output", str(output_dir),
-            "--num-cases", "1",
-            "--artifacts-per-case", "2",
-            "--strategy", "random",
-            "--seed", "42",
-        ])
+        with patch("dataset_generator.cli.load_sources", return_value=_make_patched_sources(ds)):
+            gen_main([
+                "test",
+                "--output", str(output_dir),
+                "--num-cases", "1",
+                "--artifacts-per-case", "2",
+                "--strategy", "random",
+                "--seed", "42",
+            ])
 
         # The grader's load_ground_truth should accept the generated findings
         gt = load_ground_truth(output_dir / "findings.json")
-        assert "test-project" in gt
-        assert len(gt["test-project"]) == 2
-        severities = {f.severity for f in gt["test-project"]}
+        assert "zkml" in gt
+        assert len(gt["zkml"]) == 2
+        severities = {f.severity for f in gt["zkml"]}
         assert "Critical" in severities
 
     def test_case_directory_structure(self, tmp_path):
-        sources_dir = _build_sources(tmp_path)
+        ds, _ = _build_hf_fixtures(tmp_path)
         output_dir = tmp_path / "output"
 
-        gen_main([
-            "test",
-            "--sources", str(sources_dir),
-            "--output", str(output_dir),
-            "--num-cases", "1",
-            "--artifacts-per-case", "1",
-            "--strategy", "random",
-            "--seed", "7",
-        ])
+        with patch("dataset_generator.cli.load_sources", return_value=_make_patched_sources(ds)):
+            gen_main([
+                "test",
+                "--output", str(output_dir),
+                "--num-cases", "1",
+                "--artifacts-per-case", "1",
+                "--strategy", "random",
+                "--seed", "7",
+            ])
 
         cases_dir = output_dir / "cases"
         assert cases_dir.exists()

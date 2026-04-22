@@ -23,6 +23,33 @@ def _regions_overlap(r1: dict, r2: dict) -> bool:
     return r1["start"] <= r2["end"] and r2["start"] <= r1["end"]
 
 
+def _check_probe_contamination(
+    probe_owner: Artifact, editor: Artifact,
+) -> ConflictEdge | None:
+    """Return a conflict if *editor*'s ``new_content`` introduces text that
+    would violate *probe_owner*'s ``not_contains`` probe on the same file."""
+    probes = probe_owner.raw.get("presence_probes", [])
+    for probe in probes:
+        if probe.get("kind") != "not_contains":
+            continue
+        probe_file = probe.get("file", "")
+        probe_text = probe.get("text", "")
+        if not probe_text:
+            continue
+        for edit in editor.edits:
+            if edit.get("file") != probe_file:
+                continue
+            new_content = edit.get("new_content", "")
+            if probe_text in new_content:
+                return ConflictEdge(
+                    probe_owner.artifact_id,
+                    editor.artifact_id,
+                    f"new_content introduces '{probe_text[:50]}' in "
+                    f"{probe_file}, violating not_contains probe",
+                )
+    return None
+
+
 def detect_conflicts(artifacts: list[Artifact]) -> list[ConflictEdge]:
     """Detect static conflicts among a set of artifacts.
 
@@ -30,6 +57,8 @@ def detect_conflicts(artifacts: list[Artifact]) -> list[ConflictEdge]:
     - Their regions overlap in the same file.
     - They share a semantic_tag.
     - Either lists the other in incompatible.
+    - One's ``new_content`` introduces text that violates the other's
+      ``not_contains`` probe on the same file.
     """
     conflicts: list[ConflictEdge] = []
     by_id = {a.artifact_id: a for a in artifacts}
@@ -60,6 +89,14 @@ def detect_conflicts(artifacts: list[Artifact]) -> list[ConflictEdge]:
                     a.artifact_id, b.artifact_id,
                     "Explicitly incompatible",
                 ))
+
+            # Cross-artifact probe contamination
+            edge = _check_probe_contamination(a, b)
+            if edge:
+                conflicts.append(edge)
+            edge = _check_probe_contamination(b, a)
+            if edge:
+                conflicts.append(edge)
 
     return conflicts
 

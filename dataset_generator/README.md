@@ -2,26 +2,24 @@
 
 Generates benchmark cases by applying strict-v2 bug artifacts to fixed codebases and emitting ground-truth findings JSON.
 
+Sources (papers, codebases, artifacts) are loaded from the
+[`Netzerep/zkml-audit-benchmark`](https://huggingface.co/datasets/Netzerep/zkml-audit-benchmark)
+Hugging Face dataset via `dataset_loader`.
+
 ## Usage
 
 ```bash
 python -m dataset_generator test \
-  --sources ./sources/ \
   --output ./dataset/ \
   --num-cases 2 \
   --artifacts-per-case 3 \
   --strategy random \
   --seed 42
-```
 
-## Sources layout (placeholder — subject to change)
-
-```
-sources/
-  sources.json            # [{entry-id, paper, codebase_zip, codebase_name}]
-  papers/*.pdf
-  codebases/*.zip
-  artifacts/<codebase_name>/*.json   # strict v2 artifacts
+# Override the HF repo (for local forks / testing):
+python -m dataset_generator test \
+  --repo-id myuser/zkml-audit-benchmark \
+  --output ./dataset/
 ```
 
 ## Output

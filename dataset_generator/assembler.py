@@ -33,6 +33,118 @@ class BuiltCase:
     paper_path: Path
 
 
+# ---------------------------------------------------------------------------
+# Line-offset tracking: when multiple artifacts edit the same file, earlier
+# edits may change the line count, shifting all subsequent line numbers.
+# We track each edit's effect in *clean-codebase* coordinates and adjust
+# later artifacts' anchors accordingly.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _AppliedEdit:
+    """Record of one edit's line-count effect in clean-codebase coordinates."""
+
+    file: str
+    original_end: int  # 1-based inclusive end of the replaced range
+    delta: int  # (new_lines - original_lines)
+
+
+def _compute_line_adjustment(
+    line_1based: int,
+    applied_edits: list[_AppliedEdit],
+    file: str,
+) -> int:
+    """Cumulative adjustment for a clean-codebase line number."""
+    return sum(
+        ae.delta
+        for ae in applied_edits
+        if ae.file == file and ae.original_end < line_1based
+    )
+
+
+def _adjust_edit(
+    edit: dict[str, Any],
+    applied_edits: list[_AppliedEdit],
+) -> dict[str, Any]:
+    """Return a shallow copy of *edit* with ``line_range`` anchors adjusted."""
+    anchor = edit.get("anchor", {})
+    if anchor.get("kind", "line_range") != "line_range":
+        return edit
+
+    start = anchor.get("start")
+    end = anchor.get("end")
+    if start is None or end is None:
+        return edit
+
+    file = edit["file"]
+    adj_s = _compute_line_adjustment(start, applied_edits, file)
+    adj_e = _compute_line_adjustment(end, applied_edits, file)
+    if adj_s == 0 and adj_e == 0:
+        return edit
+
+    return {
+        **edit,
+        "anchor": {**anchor, "start": start + adj_s, "end": end + adj_e},
+    }
+
+
+def _record_edit_effect(
+    edit: dict[str, Any],
+    applied_edits: list[_AppliedEdit],
+) -> None:
+    """Append the line-count delta of *edit* (using its clean-codebase coords)."""
+    anchor = edit.get("anchor", {})
+    if anchor.get("kind", "line_range") != "line_range":
+        return
+
+    op = edit.get("op", "")
+    if op in ("create_file", "replace_regex"):
+        return
+
+    file = edit["file"]
+    start = anchor.get("start", 1)
+    end = anchor.get("end", start)
+    new_content = edit.get("new_content", "")
+    new_lines = len(new_content.split("\n")) if new_content else 0
+
+    if op == "replace_block":
+        delta = new_lines - (end - start + 1)
+        ref_end = end
+    elif op == "delete_block":
+        delta = -(end - start + 1)
+        ref_end = end
+    elif op == "insert_after":
+        delta = new_lines
+        ref_end = end
+    elif op == "insert_before":
+        delta = new_lines
+        ref_end = start - 1
+    else:
+        return
+
+    if delta != 0:
+        applied_edits.append(
+            _AppliedEdit(file=file, original_end=ref_end, delta=delta)
+        )
+
+
+def _adjust_probe(
+    probe: dict[str, Any],
+    applied_edits: list[_AppliedEdit],
+) -> dict[str, Any]:
+    """Return a copy of a ``line_equals`` probe with an adjusted line number."""
+    if probe.get("kind") != "line_equals":
+        return probe
+    line = probe.get("line")
+    if line is None:
+        return probe
+    file = probe.get("file", "")
+    adj = _compute_line_adjustment(line, applied_edits, file)
+    if adj == 0:
+        return probe
+    return {**probe, "line": line + adj}
+
+
 def _load_codebase_from_disk(codebase_dir: Path) -> Codebase:
     """Load all text files from a directory into an in-memory Codebase."""
     codebase: Codebase = {}
@@ -85,23 +197,33 @@ def build_case(
         # Sort artifacts
         sorted_artifacts = topological_sort(artifacts)
 
-        # Apply edits
+        # Apply edits with line-offset tracking
+        applied_edits: list[_AppliedEdit] = []
+
         for artifact in sorted_artifacts:
             try:
+                adjusted = [_adjust_edit(e, applied_edits) for e in artifact.edits]
                 apply_artifact_edits(
-                    codebase, artifact.edits, artifact.artifact_id
+                    codebase, adjusted, artifact.artifact_id
                 )
+                # Record effects using original clean-codebase coordinates
+                for edit in artifact.edits:
+                    _record_edit_effect(edit, applied_edits)
             except EditError as e:
                 raise CaseBuildError(
                     f"Edit failed for {artifact.artifact_id}: {e}",
                     [{"artifact_id": artifact.artifact_id, "error": str(e)}],
                 ) from e
 
-        # Run probes
+        # Run probes (adjust line_equals probes for line shifts)
         all_failures: list[ProbeFailure] = []
         for artifact in sorted_artifacts:
+            adjusted_probes = [
+                _adjust_probe(p, applied_edits)
+                for p in artifact.presence_probes
+            ]
             failures = evaluate_probes(
-                codebase, artifact.presence_probes, artifact.artifact_id
+                codebase, adjusted_probes, artifact.artifact_id
             )
             all_failures.extend(failures)
 
