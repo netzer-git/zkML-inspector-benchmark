@@ -74,7 +74,7 @@ def _test_command(args: argparse.Namespace) -> None:
     print(f"  Building {len(assignments)} cases...")
 
     for entry, pool, case_idx in assignments:
-        entry_id = f"{entry.entry_id}-{case_idx}" if case_idx > 0 else entry.entry_id
+        entry_id = f"{entry.entry_id}-{case_idx + 1}"
 
         try:
             selected = strategy.assign(pool, rng)

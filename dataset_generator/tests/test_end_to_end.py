@@ -189,7 +189,7 @@ class TestEndToEnd:
             (output_dir / "findings.json").read_text(encoding="utf-8")
         )
         assert len(findings) == 2  # 2 artifacts applied
-        assert all(f["entry-id"] == "zkml" for f in findings)
+        assert all(f["entry-id"] == "zkml-1" for f in findings)
         assert {f["issue-id"] for f in findings} == {"zkML-001", "zkML-002"}
 
         # Verify each finding has all required fields
@@ -217,9 +217,9 @@ class TestEndToEnd:
 
         # The grader's load_ground_truth should accept the generated findings
         gt = load_ground_truth(output_dir / "findings.json")
-        assert "zkml" in gt
-        assert len(gt["zkml"]) == 2
-        severities = {f.severity for f in gt["zkml"]}
+        assert "zkml-1" in gt
+        assert len(gt["zkml-1"]) == 2
+        severities = {f.severity for f in gt["zkml-1"]}
         assert "Critical" in severities
 
     def test_case_directory_structure(self, tmp_path):
