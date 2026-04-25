@@ -75,11 +75,20 @@ _CATEGORY_PROXIMITY: dict[frozenset[str], float] = {
     frozenset({"Protocol/Transcript Logic", "Engineering/Prototype Gap"}): 0.3,
     # Prototype stubs that skip a spec behaviour vs explicit spec divergence.
     frozenset({"Engineering/Prototype Gap", "Specification Mismatch"}): 0.3,
+    # Removed verifier assertion (protocol) vs missing constraint —
+    # top confusion axis across 10 benchmark runs (22 occurrences).
+    frozenset({"Protocol/Transcript Logic", "Under-constrained Circuit"}): 0.3,
+    # A quantization bit-width change is both a numerical bug and a spec deviation.
+    frozenset({"Numerical/Quantization Bug", "Specification Mismatch"}): 0.3,
     # Empty proof stubs: agent may flag the missing constraint, GT flags the
     # unfinished engineering.
     frozenset({"Under-constrained Circuit", "Engineering/Prototype Gap"}): 0.2,
     # Hardcoded quantization values read as both a numerical bug and a stub.
     frozenset({"Numerical/Quantization Bug", "Engineering/Prototype Gap"}): 0.2,
+    # A quantization range mismatch can look like a missing constraint.
+    frozenset({"Numerical/Quantization Bug", "Under-constrained Circuit"}): 0.2,
+    # Removing a commitment check can read as engineering gap or commitment issue.
+    frozenset({"Engineering/Prototype Gap", "Witness/Commitment Mismatch"}): 0.2,
 }
 
 
@@ -99,9 +108,13 @@ def score_category(agent_cat: str, gt_cat: str) -> FieldScore:
 # ---------------------------------------------------------------------------
 
 _CONCERN_PROXIMITY: dict[frozenset[str], float] = {
-    frozenset({"Proof Forgery (Soundness)", "Semantic Subversion (Integrity)"}): 0.3,
+    # "Can a prover forge a proof?" vs "does the proof prove the wrong thing?"
+    # — these genuinely coexist in most findings (30 occurrences across benchmark).
+    frozenset({"Proof Forgery (Soundness)", "Semantic Subversion (Integrity)"}): 0.4,
     frozenset({"Proof Forgery (Soundness)", "Proof Malleability"}): 0.3,
     frozenset({"Information Leakage (Privacy)", "Governance Bypass"}): 0.2,
+    # A soundness break that an agent reads as "the system becomes unreliable".
+    frozenset({"Proof Forgery (Soundness)", "Denial of Proof (Reliability)"}): 0.2,
 }
 
 

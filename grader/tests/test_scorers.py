@@ -110,6 +110,26 @@ class TestScoreCategory:
         r = score_category("Protocol/Transcript Logic", "Numerical/Quantization Bug")
         assert r.score == 0.0
 
+    def test_proximity_ptl_uc(self):
+        # Removed verifier assertion (protocol) vs missing constraint
+        r = score_category("Protocol/Transcript Logic", "Under-constrained Circuit")
+        assert r.score == 0.3
+
+    def test_proximity_nqb_sm(self):
+        # Quantization bit-width change is both numerical bug and spec deviation
+        r = score_category("Numerical/Quantization Bug", "Specification Mismatch")
+        assert r.score == 0.3
+
+    def test_proximity_nqb_uc(self):
+        # Quantization range mismatch can look like missing constraint
+        r = score_category("Numerical/Quantization Bug", "Under-constrained Circuit")
+        assert r.score == 0.2
+
+    def test_proximity_epg_wcm(self):
+        # Removing a commitment check = engineering gap or commitment issue
+        r = score_category("Engineering/Prototype Gap", "Witness/Commitment Mismatch")
+        assert r.score == 0.2
+
     def test_other_vs_specific(self):
         r = score_category("Other", "Under-constrained Circuit")
         assert r.score == 0.0
@@ -132,7 +152,7 @@ class TestScoreSecurityConcern:
         r = score_security_concern(
             "Proof Forgery (Soundness)", "Semantic Subversion (Integrity)"
         )
-        assert r.score == 0.3
+        assert r.score == 0.4
 
     def test_proximity_forgery_malleability(self):
         r = score_security_concern("Proof Forgery (Soundness)", "Proof Malleability")
@@ -149,6 +169,13 @@ class TestScoreSecurityConcern:
     def test_specific_vs_other(self):
         r = score_security_concern("Denial of Proof (Reliability)", "Other")
         assert r.score == 0.1
+
+    def test_proximity_forgery_denial(self):
+        # Soundness break read as reliability issue
+        r = score_security_concern(
+            "Proof Forgery (Soundness)", "Denial of Proof (Reliability)"
+        )
+        assert r.score == 0.2
 
     def test_no_proximity_unrelated(self):
         r = score_security_concern(
