@@ -76,13 +76,13 @@ A quoted claim in the reference is also compared by text similarity. Use `"-"` o
 
 ```bash
 python -m grader \
-    --ground-truth your_dataset.xlsx \
+    --ground-truth your_findings.json \
     --agent-output examples/agent_output.example.json \
     --output grade_report.json \
     --output-md grade_report.md
 ```
 
-Since the example findings describe fictional projects (`zkFoo`, `zkBar`) with no corresponding ground-truth entries, the grader will report `no ground truth available, skipping` for them. To see scoring in action, point `--agent-output` at output covering projects actually in your `--ground-truth` xlsx.
+Since the example findings describe fictional projects (`zkFoo`, `zkBar`) with no corresponding ground-truth entries, the grader will report `no ground truth available, skipping` for them. To see scoring in action, point `--agent-output` at output covering projects actually in your `--ground-truth` JSON.
 
 ## What to aim for
 

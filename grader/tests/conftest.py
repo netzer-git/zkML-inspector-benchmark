@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import openpyxl
 import pytest
 
 from grader.similarity import SimilarityBackend
@@ -149,23 +148,11 @@ _FICTIONAL_AGENT_OUTPUT: list[dict[str, str]] = [
 ]
 
 
-_XLSX_HEADERS = [
-    "entry-id", "issue-id", "issue-name", "issue-explanation",
-    "severity", "category", "security-concern",
-    "relevant-code", "paper-reference",
-]
-
-
 @pytest.fixture(scope="session")
-def fictional_xlsx_path(tmp_path_factory) -> Path:
-    """A fictional ground-truth xlsx built once per test session."""
-    path = tmp_path_factory.mktemp("fixtures") / "fictional_gt.xlsx"
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.append(_XLSX_HEADERS)
-    for row in _FICTIONAL_GT_ROWS:
-        ws.append([row[h] for h in _XLSX_HEADERS])
-    wb.save(str(path))
+def fictional_gt_json_path(tmp_path_factory) -> Path:
+    """A fictional ground-truth JSON built once per test session."""
+    path = tmp_path_factory.mktemp("fixtures") / "fictional_gt.json"
+    path.write_text(json.dumps(_FICTIONAL_GT_ROWS, indent=2), encoding="utf-8")
     return path
 
 
@@ -179,7 +166,7 @@ def fictional_agent_json_path(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="session")
 def fictional_gt_rows() -> list[dict[str, str]]:
-    """Raw row data used to build the xlsx — exposed for assertions."""
+    """Raw row data used to build the ground-truth JSON — exposed for assertions."""
     return list(_FICTIONAL_GT_ROWS)
 
 

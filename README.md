@@ -13,7 +13,7 @@ zkML-inspector-benchmark/
 
 ## Workflow
 
-1. **Generate / curate the dataset.** Use `dataset_generator/` to produce the ground-truth audit-finding dataset (xlsx).
+1. **Generate / curate the dataset.** Use `dataset_generator/` to produce benchmark cases and the ground-truth findings JSON from bug artifacts.
 2. **Load a run set.** Use `dataset_loader/` to fetch the paper PDFs and codebases referenced by the dataset and lay them out for the agent.
 3. **Run your agent.** Your agent reads each (paper, codebase) pair and produces a finding JSON. The expected format mirrors the dataset columns — see [`examples/agent_output.example.json`](examples/agent_output.example.json) for a complete reference file and [`examples/README.md`](examples/README.md) for the full schema including all closed-list values:
    ```json
@@ -31,7 +31,7 @@ zkML-inspector-benchmark/
    ]
    ```
    (Agents produce 8 fields. `issue-id` is a ground-truth-only label used by the dataset for cross-referencing.)
-4. **Grade.** Run `grader/` against the ground-truth xlsx and the agent JSON to get per-project and overall scores.
+4. **Grade.** Run `grader/` against the ground-truth JSON and the agent JSON to get per-project and overall scores.
 
 ## Components
 
@@ -49,7 +49,7 @@ cp .env.example .env
 
 # Run
 python -m grader \
-    --ground-truth zkMLDataset.xlsx \
+    --ground-truth findings.json \
     --agent-output agent_results.json \
     --output grade_report.json \
     --output-md grade_report.md
@@ -61,7 +61,7 @@ Defaults: `OPENAI_MODEL=gpt-4o`, `ANTHROPIC_MODEL=claude-opus-4-5`. All env vars
 
 ### `dataset_loader/` *(planned)*
 
-Given a dataset xlsx, materialize the corresponding (paper PDF, codebase) pairs into a runnable directory layout for the agent. Handles fetching from configured sources (local paths, URLs, git repos).
+Given a dataset, materialize the corresponding (paper PDF, codebase) pairs into a runnable directory layout for the agent. Handles fetching from configured sources (local paths, URLs, git repos).
 
 ### `dataset_generator/` *(planned)*
 
@@ -69,7 +69,7 @@ Tools for assembling new ground-truth audit-finding datasets: schema validation,
 
 ## Dataset schema
 
-Each finding in the ground-truth xlsx has these columns:
+Each finding in the ground-truth JSON has these fields:
 
 | Column | Type | Notes |
 |--------|------|-------|

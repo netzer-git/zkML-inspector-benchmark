@@ -1,0 +1,251 @@
+"""End-to-end smoke test for the dataset generator.
+
+Builds mock HF fixtures in tmp_path, patches load_sources, runs the generator,
+and validates that the output is correct and the grader can consume the findings.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from dataset_generator.cli import main as gen_main
+from dataset_generator.sources import Sources
+from dataset_loader import BenchmarkDataset, PairInfo
+from grader.loader import load_ground_truth
+
+
+def _build_hf_fixtures(tmp_path: Path) -> tuple[BenchmarkDataset, Path]:
+    """Build mock HF-like fixtures and return a pre-wired BenchmarkDataset.
+
+    Returns (dataset, artifacts_dir) so tests can verify artifact files exist.
+    """
+    root = tmp_path / "hf_cache"
+    root.mkdir()
+
+    # Paper
+    paper_path = root / "test_paper.pdf"
+    paper_path.write_text("Fake paper content for testing", encoding="utf-8")
+
+    # Codebase zip
+    zip_path = root / "test_codebase.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("src/main.rs", "fn main() {\n    println!(\"hello\");\n}\n")
+        zf.writestr("src/lib.rs", "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n")
+        zf.writestr("Cargo.toml", "[package]\nname = \"test\"\nversion = \"0.1.0\"\n")
+
+    # Artifacts
+    main_line1 = "fn main() {\n"
+    main_sha = hashlib.sha256(main_line1.encode("utf-8")).hexdigest()
+
+    lib_line1 = "pub fn add(a: i32, b: i32) -> i32 {\n"
+    lib_sha = hashlib.sha256(lib_line1.encode("utf-8")).hexdigest()
+
+    artifact1 = {
+        "artifact_id": "zkML-001",
+        "codebase": "zkml-fixed",
+        "source": "synthetic",
+        "finding": {
+            "name": "Hardcoded main function",
+            "explanation": "The main function is hardcoded and should be replaced with a configurable entry point.",
+            "labels": {
+                "severity": "Critical",
+                "category": "Engineering/Prototype Gap",
+                "security_concern": "Proof Forgery (Soundness)",
+                "relevant_code": "src/main.rs:1",
+                "paper_reference": "Section 1: Entry point must be configurable",
+            },
+        },
+        "edits": [
+            {
+                "file": "src/main.rs",
+                "op": "replace_block",
+                "anchor": {"kind": "line_range", "start": 1, "end": 1, "expect_sha256": main_sha},
+                "new_content": "fn main_buggy() {",
+            }
+        ],
+        "conflict_keys": {
+            "files": ["src/main.rs"],
+            "regions": [{"file": "src/main.rs", "start": 1, "end": 3}],
+            "semantic_tags": ["main_entry"],
+        },
+        "presence_probes": [
+            {"kind": "contains", "file": "src/main.rs", "text": "main_buggy"},
+            {"kind": "not_contains", "file": "src/main.rs", "text": "fn main() {"},
+        ],
+    }
+
+    artifact2 = {
+        "artifact_id": "zkML-002",
+        "codebase": "zkml-fixed",
+        "source": "synthetic",
+        "finding": {
+            "name": "Unconstrained addition operation",
+            "explanation": "The add function does not check for overflow, which could lead to incorrect results in the circuit.",
+            "labels": {
+                "severity": "Warning",
+                "category": "Under-constrained Circuit",
+                "security_concern": "Semantic Subversion (Integrity)",
+                "relevant_code": "src/lib.rs:1-2",
+                "paper_reference": "Section 3.2: All arithmetic must be range-checked",
+            },
+        },
+        "edits": [
+            {
+                "file": "src/lib.rs",
+                "op": "replace_block",
+                "anchor": {"kind": "line_range", "start": 1, "end": 1, "expect_sha256": lib_sha},
+                "new_content": "pub fn add(a: i32, b: i32) -> i32 { // UNCHECKED",
+            }
+        ],
+        "conflict_keys": {
+            "files": ["src/lib.rs"],
+            "regions": [{"file": "src/lib.rs", "start": 1, "end": 3}],
+            "semantic_tags": ["add_function"],
+        },
+        "presence_probes": [
+            {"kind": "contains", "file": "src/lib.rs", "text": "UNCHECKED"},
+        ],
+    }
+
+    artifacts_dir = root / "artifacts"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "zkML-001.json").write_text(
+        json.dumps(artifact1, indent=2), encoding="utf-8"
+    )
+    (artifacts_dir / "zkML-002.json").write_text(
+        json.dumps(artifact2, indent=2), encoding="utf-8"
+    )
+
+    # Build a BenchmarkDataset with mocked internals
+    manifest = {
+        "total_files": 4,
+        "files": [
+            {"path": "papers/zkml.pdf", "sha256": "a" * 64, "size": 100},
+            {"path": "codebases/zkml.zip", "sha256": "b" * 64, "size": 200},
+            {"path": "artifacts/zkml/zkML-001.json", "sha256": "c" * 64, "size": 50},
+            {"path": "artifacts/zkml/zkML-002.json", "sha256": "d" * 64, "size": 50},
+        ],
+    }
+
+    # Map repo paths to local fixture files
+    path_map = {
+        "papers/zkml.pdf": paper_path,
+        "codebases/zkml.zip": zip_path,
+        "artifacts/zkml/zkML-001.json": artifacts_dir / "zkML-001.json",
+        "artifacts/zkml/zkML-002.json": artifacts_dir / "zkML-002.json",
+    }
+
+    ds = BenchmarkDataset.__new__(BenchmarkDataset)
+    ds._repo_id = "test/repo"
+    ds._revision = None
+    ds._manifest = manifest
+    ds._pairs_cache = None
+    ds._download = lambda repo_path: path_map[repo_path]
+
+    return ds, artifacts_dir
+
+
+def _make_patched_sources(ds: BenchmarkDataset) -> Sources:
+    """Create a Sources instance backed by the mock dataset."""
+    return Sources(ds)
+
+
+class TestEndToEnd:
+    def test_generate_single_case(self, tmp_path):
+        ds, _ = _build_hf_fixtures(tmp_path)
+        output_dir = tmp_path / "output"
+
+        with patch("dataset_generator.cli.load_sources", return_value=_make_patched_sources(ds)):
+            gen_main([
+                "test",
+                "--output", str(output_dir),
+                "--num-cases", "1",
+                "--artifacts-per-case", "2",
+                "--strategy", "random",
+                "--seed", "42",
+            ])
+
+        # Verify outputs exist
+        assert (output_dir / "dataset_manifest.json").exists()
+        assert (output_dir / "findings.json").exists()
+
+        # Verify manifest
+        manifest = json.loads(
+            (output_dir / "dataset_manifest.json").read_text(encoding="utf-8")
+        )
+        assert manifest["strategy"] == "random"
+        assert manifest["seed"] == 42
+        assert manifest["num_cases"] == 1
+        assert len(manifest["cases"]) == 1
+
+        # Verify findings
+        findings = json.loads(
+            (output_dir / "findings.json").read_text(encoding="utf-8")
+        )
+        assert len(findings) == 2  # 2 artifacts applied
+        assert all(f["entry-id"] == "zkml-1" for f in findings)
+        assert {f["issue-id"] for f in findings} == {"zkML-001", "zkML-002"}
+
+        # Verify each finding has all required fields
+        required_fields = {
+            "entry-id", "issue-id", "issue-name", "issue-explanation",
+            "severity", "category", "security-concern",
+            "relevant-code", "paper-reference",
+        }
+        for f in findings:
+            assert required_fields <= set(f.keys()), f"Missing fields in {f}"
+
+    def test_findings_loadable_by_grader(self, tmp_path):
+        ds, _ = _build_hf_fixtures(tmp_path)
+        output_dir = tmp_path / "output"
+
+        with patch("dataset_generator.cli.load_sources", return_value=_make_patched_sources(ds)):
+            gen_main([
+                "test",
+                "--output", str(output_dir),
+                "--num-cases", "1",
+                "--artifacts-per-case", "2",
+                "--strategy", "random",
+                "--seed", "42",
+            ])
+
+        # The grader's load_ground_truth should accept the generated findings
+        gt = load_ground_truth(output_dir / "findings.json")
+        assert "zkml-1" in gt
+        assert len(gt["zkml-1"]) == 2
+        severities = {f.severity for f in gt["zkml-1"]}
+        assert "Critical" in severities
+
+    def test_case_directory_structure(self, tmp_path):
+        ds, _ = _build_hf_fixtures(tmp_path)
+        output_dir = tmp_path / "output"
+
+        with patch("dataset_generator.cli.load_sources", return_value=_make_patched_sources(ds)):
+            gen_main([
+                "test",
+                "--output", str(output_dir),
+                "--num-cases", "1",
+                "--artifacts-per-case", "1",
+                "--strategy", "random",
+                "--seed", "7",
+            ])
+
+        cases_dir = output_dir / "cases"
+        assert cases_dir.exists()
+        case_dirs = list(cases_dir.iterdir())
+        assert len(case_dirs) >= 1
+
+        # Check case.json exists in the case directory
+        case_dir = case_dirs[0]
+        case_json = case_dir / "case.json"
+        assert case_json.exists()
+        case_meta = json.loads(case_json.read_text(encoding="utf-8"))
+        assert "entry_id" in case_meta
+        assert "artifact_ids" in case_meta
+        assert "source_codebase" in case_meta

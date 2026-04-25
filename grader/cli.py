@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--ground-truth", required=True,
-        help="Path to ground truth xlsx file",
+        help="Path to ground truth JSON file (flat array of findings)",
     )
     parser.add_argument(
         "--agent-output", required=True,

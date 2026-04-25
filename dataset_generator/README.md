@@ -1,14 +1,35 @@
-# dataset_generator (planned)
+# dataset_generator
 
-Tools for assembling and validating new ground-truth audit-finding datasets.
+Generates benchmark cases by applying strict-v2 bug artifacts to fixed codebases and emitting ground-truth findings JSON.
 
-## Planned scope
+Sources (papers, codebases, artifacts) are loaded from the
+[`Netzerep/zkml-audit-benchmark`](https://huggingface.co/datasets/Netzerep/zkml-audit-benchmark)
+Hugging Face dataset via `dataset_loader`.
 
-- **Schema validation** — verify that an xlsx conforms to the dataset schema (columns, closed-list values, code-ref format).
-- **Curation helpers** — interactive prompts for adding new findings, with closed-list validation and ID auto-assignment.
-- **Candidate proposal** — pipelines that scan an existing audit report and propose candidate finding entries (severity, category, code refs) for human review.
-- **Export** — write the curated dataset back to xlsx in the canonical column order.
+## Usage
 
-## Status
+```bash
+python -m dataset_generator test \
+  --output ./dataset/ \
+  --num-cases 2 \
+  --artifacts-per-case 3 \
+  --strategy random \
+  --seed 42
 
-Not yet implemented.
+# Override the HF repo (for local forks / testing):
+python -m dataset_generator test \
+  --repo-id myuser/zkml-audit-benchmark \
+  --output ./dataset/
+```
+
+## Output
+
+```
+output/
+  dataset_manifest.json   # case metadata (strategy, seed, case list)
+  findings.json           # aggregated ground-truth (flat array, grader-compatible)
+  cases/<entry-id>/
+    paper.pdf
+    codebase/             # modified codebase with injected bugs
+    case.json             # per-case metadata (artifact_ids, source_codebase)
+```
