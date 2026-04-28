@@ -86,7 +86,7 @@ def load_ground_truth(json_path: str | Path) -> dict[str, list[GroundTruthFindin
     """Load ground truth from a flat JSON array.
 
     Returns findings grouped by normalized entry_id. Each object must have
-    the 7 required fields plus an optional ``issue-id``. If ``issue-id`` is
+    the 5 required fields plus an optional ``issue-id``. If ``issue-id`` is
     absent it is synthesized as ``{entry-id}-{index}``.
     """
     with open(json_path, encoding="utf-8") as f:

@@ -533,7 +533,7 @@ class TestGradeReportBadges:
     ):
         """When pair scores are low (below 0.4), the red badge should appear."""
         # Force low pair_scores by making the matches clear threshold but
-        # agent category/etc differ from GT.
+        # code/paper refs differ from GT.
         cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
             _bulk_responder({"alpha-01": 5})
         )
@@ -544,8 +544,6 @@ class TestGradeReportBadges:
             "entry-id": "alpha",
             "issue-name": "Something",
             "issue-explanation": "Unrelated words entirely here",
-            "category": "Other",      # GT is Under-constrained Circuit -> 0
-            "security-concern": "Other",  # GT is Proof Forgery -> 0.1
             "relevant-code": "wrong/path.rs:999",  # no match
             "paper-reference": "-",
         }]))

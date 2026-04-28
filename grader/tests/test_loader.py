@@ -200,8 +200,6 @@ class TestLoadAgentOutput:
                 "entry-id": "alpha",
                 "issue-name": "Test",
                 "issue-explanation": "Test",
-                "category": "Other",
-                "security-concern": "Other",
                 "relevant-code": "file.cu:10-20, other.py:5",
                 "paper-reference": "-",
             }
