@@ -24,6 +24,13 @@ python -m grader \
     --output grade_report.json \
     --output-md grade_report.md
 
+# Run the grader with baseline exclusion (removes known pre-existing issues)
+python -m grader \
+    --ground-truth findings.json \
+    --agent-output agent_results.json \
+    --baseline baseline_findings.json \
+    --output grade_report.json
+
 # Materialize a run-set from HF for agent auditing
 python -m dataset_loader materialize --output ./run_set
 python -m dataset_loader materialize --output ./run_set --pairs zkllm,zkml

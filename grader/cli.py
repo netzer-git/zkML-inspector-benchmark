@@ -18,6 +18,7 @@ def _force_utf8_stdout() -> None:
             except Exception:
                 pass
 
+from grader.baseline import filter_baseline, load_baseline, pair_prefix
 from grader.loader import load_agent_output, load_ground_truth
 from grader.matcher import match_findings
 from grader.report import (
@@ -111,6 +112,13 @@ def main(argv: list[str] | None = None) -> None:
              "Each newly graded project is appended immediately. "
              "Survives crashes — re-run the same command to resume.",
     )
+    parser.add_argument(
+        "--baseline", default=None, metavar="PATH",
+        help="Path to baseline findings JSON. Agent findings matching "
+             "a baseline entry (same pair, LLM match_score >= threshold) "
+             "are excluded from scoring — they don't count toward recall "
+             "or precision.",
+    )
     args = parser.parse_args(argv)
 
     _force_utf8_stdout()
@@ -126,6 +134,14 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Loading agent output from {args.agent_output}...")
     agent = load_agent_output(args.agent_output)
     print(f"  {sum(len(v) for v in agent.values())} findings across {len(agent)} projects")
+
+    # Optional baseline exclusion list
+    baseline: dict[str, list] = {}
+    total_baseline_excluded = 0
+    if args.baseline:
+        baseline = load_baseline(args.baseline)
+        n_entries = sum(len(v) for v in baseline.values())
+        print(f"Loaded baseline: {n_entries} findings across {len(baseline)} pairs")
 
     # Optional entry-id filter — restricts both GT and agent dicts to the
     # selected projects (case-insensitive).
@@ -181,9 +197,24 @@ def main(argv: list[str] | None = None) -> None:
             print(f"  {project}: no ground truth available, skipping")
             continue
 
+        # Baseline pre-filter: remove agent findings that match known
+        # pre-existing issues before GT matching.
+        n_excluded = 0
+        if baseline:
+            pair_key = pair_prefix(project)
+            pair_baselines = baseline.get(pair_key, [])
+            if pair_baselines:
+                agent_findings, excluded = filter_baseline(
+                    agent_findings, pair_baselines, backend,
+                    threshold=args.threshold, verbose=False,
+                )
+                n_excluded = len(excluded)
+                total_baseline_excluded += n_excluded
+
+        baseline_note = f" ({n_excluded} baseline-excluded)" if n_excluded else ""
         print(
             f"\n==> Project {project}: "
-            f"{len(agent_findings)} agent findings vs {len(gt_findings)} GT -- "
+            f"{len(agent_findings)} agent findings{baseline_note} vs {len(gt_findings)} GT -- "
             f"matching (1 LLM call per agent finding)..."
         )
         try:
@@ -238,6 +269,11 @@ def main(argv: list[str] | None = None) -> None:
         project_grades, args.threshold, quality_threshold, "llm-judge",
         skipped_projects=skipped_projects, failed_projects=failed_projects,
     )
+
+    # Inject baseline metadata into report
+    if args.baseline:
+        report.meta["baseline_path"] = args.baseline
+        report.meta["baseline_excluded_count"] = total_baseline_excluded
 
     o = report.overall
     print(f"\nOverall: recall={o['recall']:.4f}, "
