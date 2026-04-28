@@ -38,10 +38,15 @@ def _test_command(args: argparse.Namespace) -> None:
     if strategy_cls is None:
         print(f"Unknown strategy: {strategy_name}", file=sys.stderr)
         sys.exit(1)
-    # RandomStrategy requires k; AllStrategy takes no args
     if strategy_name == "random":
         strategy = strategy_cls(artifacts_per_case)
+    elif strategy_name == "fixed":
+        if not args.artifact_ids:
+            print("--artifact-ids is required for 'fixed' strategy", file=sys.stderr)
+            sys.exit(1)
+        strategy = strategy_cls(args.artifact_ids)
     else:
+        # AllStrategy, IsolatedStrategy — no constructor args
         strategy = strategy_cls()
 
     rng = random.Random(seed)
@@ -68,7 +73,9 @@ def _test_command(args: argparse.Namespace) -> None:
         for a in pool:
             all_artifacts[a.artifact_id] = a
 
-        for case_idx in range(num_cases):
+        # IsolatedStrategy: override num_cases to pool size (one case per artifact)
+        effective_num_cases = len(pool) if strategy_name == "isolated" else num_cases
+        for case_idx in range(effective_num_cases):
             assignments.append((entry, pool, case_idx))
 
     print(f"  Building {len(assignments)} cases...")
@@ -207,6 +214,11 @@ def main(argv: list[str] | None = None) -> None:
     test_parser.add_argument(
         "--seed", type=int, default=42,
         help="Random seed for reproducibility (default: 42)",
+    )
+    test_parser.add_argument(
+        "--artifact-ids", type=lambda s: [x.strip() for x in s.split(",")],
+        default=None,
+        help="Comma-separated artifact IDs for 'fixed' strategy (e.g. zkGPT-001,zkGPT-004)",
     )
 
     args = parser.parse_args(argv)

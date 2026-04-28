@@ -48,9 +48,6 @@ def _make_artifact(
             "name": f"Test finding {artifact_id}",
             "explanation": "A test explanation for this artifact finding.",
             "labels": {
-                "severity": "Critical",
-                "category": "Other",
-                "security_concern": "Other",
                 "relevant_code": "src/test.rs:10",
                 "paper_reference": "-",
             },
@@ -449,6 +446,88 @@ class TestStrategies:
         with pytest.raises(ValueError, match="conflicting"):
             strategy.assign(pool, random.Random(42))
 
+    def test_isolated_strategy_emits_n_single_artifact_cases(self):
+        from dataset_generator.strategies import IsolatedStrategy
+        pool = [
+            _make_artifact(f"zkML-{i:03d}", regions=[{"file": f"f{i}.rs", "start": 1, "end": 5}])
+            for i in range(1, 6)
+        ]
+        strategy = IsolatedStrategy()
+        results = [strategy.assign(pool, random.Random(0)) for _ in range(5)]
+        # Each call returns exactly one artifact
+        assert all(len(r) == 1 for r in results)
+        # Artifact IDs are sorted and non-repeating
+        ids = [r[0].artifact_id for r in results]
+        assert ids == sorted(ids)
+        assert len(set(ids)) == 5
+
+    def test_isolated_strategy_exhaustion_raises(self):
+        from dataset_generator.strategies import IsolatedStrategy
+        pool = [_make_artifact("zkML-001")]
+        strategy = IsolatedStrategy()
+        strategy.assign(pool, random.Random(0))  # first call OK
+        with pytest.raises(ValueError, match="exhausted"):
+            strategy.assign(pool, random.Random(0))
+
+    def test_isolated_strategy_includes_dependencies(self):
+        from dataset_generator.strategies import IsolatedStrategy
+        a = _make_artifact("zkML-001", requires=["zkML-002"],
+                          regions=[{"file": "a.rs", "start": 10, "end": 15}])
+        b = _make_artifact("zkML-002",
+                          regions=[{"file": "a.rs", "start": 1, "end": 5}])
+        pool = [a, b]
+        strategy = IsolatedStrategy()
+        # First call: zkML-001 (sorted first) requires zkML-002
+        result = strategy.assign(pool, random.Random(0))
+        ids = {r.artifact_id for r in result}
+        assert "zkML-001" in ids
+        assert "zkML-002" in ids
+
+    def test_fixed_subset_strategy(self):
+        from dataset_generator.strategies import FixedSubsetStrategy
+        pool = [
+            _make_artifact(f"zkML-{i:03d}", regions=[{"file": f"f{i}.rs", "start": 1, "end": 5}])
+            for i in range(1, 6)
+        ]
+        strategy = FixedSubsetStrategy(["zkML-002", "zkML-004"])
+        selected = strategy.assign(pool, random.Random(0))
+        ids = {a.artifact_id for a in selected}
+        assert ids == {"zkML-002", "zkML-004"}
+
+    def test_fixed_subset_strategy_missing_artifact_raises(self):
+        from dataset_generator.strategies import FixedSubsetStrategy
+        pool = [_make_artifact("zkML-001")]
+        strategy = FixedSubsetStrategy(["zkML-001", "zkML-999"])
+        with pytest.raises(ValueError, match="not in pool"):
+            strategy.assign(pool, random.Random(0))
+
+    def test_fixed_subset_strategy_conflict_raises(self):
+        from dataset_generator.strategies import FixedSubsetStrategy
+        pool = [
+            _make_artifact("zkML-001", regions=[{"file": "a.rs", "start": 1, "end": 10}]),
+            _make_artifact("zkML-002", regions=[{"file": "a.rs", "start": 5, "end": 15}]),
+        ]
+        strategy = FixedSubsetStrategy(["zkML-001", "zkML-002"])
+        with pytest.raises(ValueError, match="conflicts"):
+            strategy.assign(pool, random.Random(0))
+
+    def test_fixed_subset_strategy_resolves_deps(self):
+        from dataset_generator.strategies import FixedSubsetStrategy
+        a = _make_artifact("zkML-001", requires=["zkML-002"],
+                          regions=[{"file": "a.rs", "start": 10, "end": 15}])
+        b = _make_artifact("zkML-002",
+                          regions=[{"file": "a.rs", "start": 1, "end": 5}])
+        pool = [a, b]
+        strategy = FixedSubsetStrategy(["zkML-001"])
+        selected = strategy.assign(pool, random.Random(0))
+        ids = {s.artifact_id for s in selected}
+        assert ids == {"zkML-001", "zkML-002"}
+
+    def test_fixed_subset_strategy_empty_raises(self):
+        from dataset_generator.strategies import FixedSubsetStrategy
+        with pytest.raises(ValueError, match="non-empty"):
+            FixedSubsetStrategy([])
+
 
 # ---------------------------------------------------------------------------
 # Artifact validation (schema)
@@ -464,9 +543,6 @@ class TestArtifactValidation:
                 "name": "Test finding name here",
                 "explanation": "A detailed explanation of the test finding.",
                 "labels": {
-                    "severity": "Critical",
-                    "category": "Other",
-                    "security_concern": "Other",
                     "relevant_code": "",
                     "paper_reference": "-",
                 },
@@ -499,9 +575,6 @@ class TestArtifactValidation:
                 "name": "Test finding name here",
                 "explanation": "A detailed explanation of the test finding.",
                 "labels": {
-                    "severity": "Critical",
-                    "category": "Other",
-                    "security_concern": "Other",
                     "relevant_code": "",
                     "paper_reference": "-",
                 },
