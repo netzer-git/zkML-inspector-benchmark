@@ -240,3 +240,107 @@ class TestEndToEnd:
         assert "entry_id" in case_meta
         assert "artifact_ids" in case_meta
         assert "source_codebase" in case_meta
+
+
+class TestRevert:
+    """Tests for revert_artifacts (oracle-revert for composition experiment)."""
+
+    def test_revert_one_artifact_round_trips(self, tmp_path):
+        """Apply 2 artifacts, revert one → result matches applying only the other."""
+        ds, _ = _build_hf_fixtures(tmp_path)
+        sources = _make_patched_sources(ds)
+        entry = sources.iter_entries()[0]  # "zkml"
+        pool = sources.get_artifact_pool(entry.entry_id)
+
+        # Build full case with both artifacts
+        clean_dir = sources.extract_codebase(entry.entry_id, tmp_path / "clean")
+        paper = sources.get_paper_path(entry.entry_id)
+
+        from dataset_generator.assembler import build_case
+        from dataset_generator.revert import revert_artifacts
+
+        # Build single-artifact reference case (zkML-002 only)
+        ref_case = build_case(
+            entry_id="ref",
+            codebase_dir=clean_dir,
+            codebase_name=entry.codebase_name,
+            paper_path=paper,
+            artifacts=[pool[1]],  # zkML-002
+            output_dir=tmp_path / "ref_out",
+        )
+
+        # Revert zkML-001 from the full set → should match ref_case
+        reverted = revert_artifacts(
+            clean_codebase_dir=clean_dir,
+            paper_path=paper,
+            all_artifacts=pool,
+            revert_ids={"zkML-001"},
+            entry_id="reverted",
+            codebase_name=entry.codebase_name,
+            output_dir=tmp_path / "revert_out",
+        )
+
+        # Compare file contents
+        ref_codebase = ref_case.case_dir / "codebase"
+        rev_codebase = reverted.case_dir / "codebase"
+
+        for f in sorted(ref_codebase.rglob("*")):
+            if f.is_file():
+                rel = f.relative_to(ref_codebase)
+                rev_f = rev_codebase / rel
+                assert rev_f.exists(), f"Missing {rel} in reverted case"
+                assert f.read_text(encoding="utf-8") == rev_f.read_text(encoding="utf-8"), \
+                    f"Content mismatch in {rel}"
+
+    def test_revert_all_returns_clean(self, tmp_path):
+        """Reverting all artifacts returns the clean codebase."""
+        ds, _ = _build_hf_fixtures(tmp_path)
+        sources = _make_patched_sources(ds)
+        entry = sources.iter_entries()[0]
+        pool = sources.get_artifact_pool(entry.entry_id)
+
+        clean_dir = sources.extract_codebase(entry.entry_id, tmp_path / "clean")
+        paper = sources.get_paper_path(entry.entry_id)
+
+        from dataset_generator.revert import revert_artifacts
+
+        reverted = revert_artifacts(
+            clean_codebase_dir=clean_dir,
+            paper_path=paper,
+            all_artifacts=pool,
+            revert_ids={a.artifact_id for a in pool},
+            entry_id="all-reverted",
+            codebase_name=entry.codebase_name,
+            output_dir=tmp_path / "revert_out",
+        )
+
+        rev_codebase = reverted.case_dir / "codebase"
+        for f in sorted(clean_dir.rglob("*")):
+            if f.is_file():
+                rel = f.relative_to(clean_dir)
+                rev_f = rev_codebase / rel
+                assert rev_f.exists(), f"Missing {rel}"
+                assert f.read_text(encoding="utf-8") == rev_f.read_text(encoding="utf-8"), \
+                    f"Content mismatch in {rel}"
+
+    def test_revert_unknown_id_raises(self, tmp_path):
+        """Reverting an artifact not in the list raises ValueError."""
+        ds, _ = _build_hf_fixtures(tmp_path)
+        sources = _make_patched_sources(ds)
+        entry = sources.iter_entries()[0]
+        pool = sources.get_artifact_pool(entry.entry_id)
+        clean_dir = sources.extract_codebase(entry.entry_id, tmp_path / "clean")
+
+        from dataset_generator.revert import revert_artifacts
+        import pytest
+
+        with pytest.raises(ValueError, match="unknown artifact"):
+            revert_artifacts(
+                clean_codebase_dir=clean_dir,
+                paper_path=None,
+                all_artifacts=pool,
+                revert_ids={"zkML-999"},
+                entry_id="bad",
+                codebase_name="zkml",
+                output_dir=tmp_path / "out",
+            )
