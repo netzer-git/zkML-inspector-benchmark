@@ -4,14 +4,13 @@
 
 ## Schema
 
-The file is a flat JSON array. Each element is a finding object with **all 8 fields required** (the grader errors on missing fields):
+The file is a flat JSON array. Each element is a finding object with **all 7 fields required** (the grader errors on missing fields):
 
 ```json
 {
   "entry-id": "<project key>",
   "issue-name": "<3-7 word title>",
   "issue-explanation": "<one paragraph>",
-  "severity": "Critical | Warning | Info",
   "category": "<one of 7 values or Other>",
   "security-concern": "<one of 6 values or Other>",
   "relevant-code": "file.rs:10-20, other.cu:3",
@@ -24,11 +23,6 @@ Findings from different projects may be interleaved in any order. The grader gro
 ## Closed-list values
 
 Invalid values cause the grader to exit with a validation error.
-
-**severity** — exactly one of:
-- `Critical`
-- `Warning`
-- `Info`
 
 **category** — answers: *"Where exactly did the implementation go wrong?"* Exactly one of:
 - `Under-constrained Circuit` — the R1CS or PLONKish constraints are too "loose," allowing non-deterministic values that the verifier can't catch.
@@ -87,7 +81,6 @@ Since the example findings describe fictional projects (`zkFoo`, `zkBar`) with n
 ## What to aim for
 
 The grader rewards:
-- **Correct severity** — under-reporting (calling a Critical issue a Warning) scores zero; over-reporting gets partial credit.
 - **Precise code location** — overlapping line ranges in the right file score best.
 - **Concrete paper anchoring** — cite the exact section or protocol; include the quoted claim when you can.
-- **Finding the issue the dataset recorded** — agents are scored on matched pairs, so the `name + explanation` text should describe the same vulnerability a human auditor would flag. Extra Critical findings not in the dataset count against precision.
+- **Finding the issue the dataset recorded** — agents are scored on matched pairs, so the `name + explanation` text should describe the same vulnerability a human auditor would flag. Extra findings not in the dataset count against precision.

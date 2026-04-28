@@ -15,22 +15,19 @@ zkML-inspector-benchmark/
 
 1. **Generate / curate the dataset.** Use `dataset_generator/` to produce benchmark cases and the ground-truth findings JSON from bug artifacts.
 2. **Load a run set.** Use `dataset_loader/` to fetch the paper PDFs and codebases referenced by the dataset and lay them out for the agent.
-3. **Run your agent.** Your agent reads each (paper, codebase) pair and produces a finding JSON. The expected format mirrors the dataset columns — see [`examples/agent_output.example.json`](examples/agent_output.example.json) for a complete reference file and [`examples/README.md`](examples/README.md) for the full schema including all closed-list values:
+3. **Run your agent.** Your agent reads each (paper, codebase) pair and produces a finding JSON. The expected format mirrors the dataset columns — see [`examples/agent_output.example.json`](examples/agent_output.example.json) for a complete reference file and [`examples/README.md`](examples/README.md) for the full schema:
    ```json
    [
      {
        "entry-id": "<project-key>",
        "issue-name": "...",
        "issue-explanation": "...",
-       "severity": "Critical|Warning|Info",
-       "category": "...",
-       "security-concern": "...",
        "relevant-code": "file.rs:10-20, other.cu:3",
        "paper-reference": "Section 6.1.3: ..."
      }
    ]
    ```
-   (Agents produce 8 fields. `issue-id` is a ground-truth-only label used by the dataset for cross-referencing.)
+   (Agents produce 5 fields. `issue-id` is a ground-truth-only label used by the dataset for cross-referencing.)
 4. **Grade.** Run `grader/` against the ground-truth JSON and the agent JSON to get per-project and overall scores.
 
 ## Components
@@ -52,20 +49,21 @@ python -m grader \
     --ground-truth findings.json \
     --agent-output agent_results.json \
     --output grade_report.json \
-    --output-md grade_report.md
+    --output-md grade_report.md \
+    --checkpoint checkpoint.jsonl
 ```
 
-Scores 5 fields per matched finding (severity, category, security-concern, relevant-code, paper-reference) plus precision, recall, F1, severity-weighted recall, and a composite quality score across the matched set. Extra unmatched agent findings are reported broken down by severity.
+Uses a quality-gate model: each matched pair is scored via `quality = 0.5*(match_score/5) + 0.3*code_location + 0.2*paper_reference` with a pass/fail threshold (default 0.55). Reports recall, precision, F1, and average quality per project and overall. Supports `--checkpoint` for incremental saves (JSONL, one project per line) with automatic resume on restart.
 
 Defaults: `OPENAI_MODEL=gpt-4o`, `ANTHROPIC_MODEL=claude-opus-4-5`. All env vars are documented in `.env.example`. See `grader/` for module docs and tests under `grader/tests/`.
 
-### `dataset_loader/` *(planned)*
+### `dataset_loader/`
 
-Given a dataset, materialize the corresponding (paper PDF, codebase) pairs into a runnable directory layout for the agent. Handles fetching from configured sources (local paths, URLs, git repos).
+Given a dataset, materializes the corresponding (paper PDF, codebase) pairs into a runnable directory layout for the agent. Fetches from the HuggingFace dataset repo.
 
-### `dataset_generator/` *(planned)*
+### `dataset_generator/`
 
-Tools for assembling new ground-truth audit-finding datasets: schema validation, manual curation helpers, and pipelines for proposing candidate findings from existing audit reports.
+Produces benchmark cases by applying bug artifacts to clean codebases and emitting ground-truth findings JSON. Supports multiple selection strategies (random, all, isolated, fixed-subset) and an iterative runner for composition experiments.
 
 ## Dataset schema
 
@@ -77,9 +75,6 @@ Each finding in the ground-truth JSON has these fields:
 | issue-id | str | `<entry-id>-NN` — GT-only; agents do not produce this. |
 | issue-name | str | 3-7 words |
 | issue-explanation | str | One paragraph |
-| severity | enum | `Critical` / `Warning` / `Info` |
-| category | enum | 7 options + `Other` (see `grader/__init__.py`) |
-| security-concern | enum | 6 options + `Other` |
 | relevant-code | str | `file:line[-line], file:line` (can be empty) |
 | paper-reference | str | Section / Protocol / Theorem cite + quote (can be empty) |
 
