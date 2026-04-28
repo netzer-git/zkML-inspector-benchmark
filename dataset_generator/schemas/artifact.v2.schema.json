@@ -49,41 +49,10 @@
         },
         "labels": {
           "type": "object",
-          "required": ["severity", "category", "security_concern", "relevant_code", "paper_reference"],
+          "required": ["relevant_code", "paper_reference"],
           "additionalProperties": false,
           "description": "Grader-aligned labels for benchmark scoring.",
           "properties": {
-            "severity": {
-              "type": "string",
-              "enum": ["Critical", "Warning", "Info"],
-              "description": "Critical = malicious prover can forge; Warning = weakens paper guarantees; Info = minor deviation."
-            },
-            "category": {
-              "type": "string",
-              "enum": [
-                "Under-constrained Circuit",
-                "Protocol/Transcript Logic",
-                "Specification Mismatch",
-                "Numerical/Quantization Bug",
-                "Witness/Commitment Mismatch",
-                "Engineering/Prototype Gap",
-                "Other"
-              ],
-              "description": "Where exactly did the implementation go wrong?"
-            },
-            "security_concern": {
-              "type": "string",
-              "enum": [
-                "Proof Forgery (Soundness)",
-                "Information Leakage (Privacy)",
-                "Semantic Subversion (Integrity)",
-                "Proof Malleability",
-                "Denial of Proof (Reliability)",
-                "Governance Bypass",
-                "Other"
-              ],
-              "description": "If an attacker exploits this, what happens to the system's trust assumptions?"
-            },
             "relevant_code": {
               "type": "string",
               "description": "Comma-separated file:line references (e.g., 'src/model.rs:210, src/gadgets/var_div.rs:62-82'). Empty string if no specific code location."

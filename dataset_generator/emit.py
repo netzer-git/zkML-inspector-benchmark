@@ -22,9 +22,6 @@ def _artifact_to_finding(
         "issue-id": artifact.artifact_id,
         "issue-name": f["name"],
         "issue-explanation": f["explanation"],
-        "severity": labels["severity"],
-        "category": labels["category"],
-        "security-concern": labels["security_concern"],
         "relevant-code": labels["relevant_code"],
         "paper-reference": labels["paper_reference"],
     }

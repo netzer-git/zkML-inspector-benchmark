@@ -54,9 +54,6 @@ def _build_hf_fixtures(tmp_path: Path) -> tuple[BenchmarkDataset, Path]:
             "name": "Hardcoded main function",
             "explanation": "The main function is hardcoded and should be replaced with a configurable entry point.",
             "labels": {
-                "severity": "Critical",
-                "category": "Engineering/Prototype Gap",
-                "security_concern": "Proof Forgery (Soundness)",
                 "relevant_code": "src/main.rs:1",
                 "paper_reference": "Section 1: Entry point must be configurable",
             },
@@ -88,9 +85,6 @@ def _build_hf_fixtures(tmp_path: Path) -> tuple[BenchmarkDataset, Path]:
             "name": "Unconstrained addition operation",
             "explanation": "The add function does not check for overflow, which could lead to incorrect results in the circuit.",
             "labels": {
-                "severity": "Warning",
-                "category": "Under-constrained Circuit",
-                "security_concern": "Semantic Subversion (Integrity)",
                 "relevant_code": "src/lib.rs:1-2",
                 "paper_reference": "Section 3.2: All arithmetic must be range-checked",
             },
@@ -195,7 +189,6 @@ class TestEndToEnd:
         # Verify each finding has all required fields
         required_fields = {
             "entry-id", "issue-id", "issue-name", "issue-explanation",
-            "severity", "category", "security-concern",
             "relevant-code", "paper-reference",
         }
         for f in findings:
@@ -219,8 +212,6 @@ class TestEndToEnd:
         gt = load_ground_truth(output_dir / "findings.json")
         assert "zkml-1" in gt
         assert len(gt["zkml-1"]) == 2
-        severities = {f.severity for f in gt["zkml-1"]}
-        assert "Critical" in severities
 
     def test_case_directory_structure(self, tmp_path):
         ds, _ = _build_hf_fixtures(tmp_path)
