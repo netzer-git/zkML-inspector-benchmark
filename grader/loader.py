@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
-from grader import CATEGORIES, SECURITY_CONCERNS, SEVERITIES
+
 
 
 class CodeRef(NamedTuple):
@@ -25,9 +25,6 @@ class GroundTruthFinding:
     issue_id: str
     issue_name: str
     issue_explanation: str
-    severity: str
-    category: str
-    security_concern: str
     relevant_code: list[CodeRef] = field(default_factory=list)
     paper_reference: str = ""
 
@@ -37,9 +34,6 @@ class AgentFinding:
     entry_id: str
     issue_name: str
     issue_explanation: str
-    severity: str
-    category: str
-    security_concern: str
     relevant_code: list[CodeRef] = field(default_factory=list)
     paper_reference: str = ""
 
@@ -78,33 +72,12 @@ def _normalize_entry_id(raw: str) -> str:
     return raw.strip().lower()
 
 
-def _validate_severity(value: str, context: str) -> str:
-    if value not in SEVERITIES:
-        raise ValueError(f"{context}: invalid severity '{value}'. Must be one of {SEVERITIES}")
-    return value
-
-
-def _validate_category(value: str, context: str) -> str:
-    if value not in CATEGORIES:
-        raise ValueError(f"{context}: invalid category '{value}'. Must be one of {CATEGORIES}")
-    return value
-
-
-def _validate_security_concern(value: str, context: str) -> str:
-    if value not in SECURITY_CONCERNS:
-        raise ValueError(
-            f"{context}: invalid security-concern '{value}'. Must be one of {SECURITY_CONCERNS}"
-        )
-    return value
-
-
 # ---------------------------------------------------------------------------
 # Ground truth loader (JSON)
 # ---------------------------------------------------------------------------
 
 _REQUIRED_GT_FIELDS = {
     "entry-id", "issue-name", "issue-explanation",
-    "severity", "category", "security-concern",
     "relevant-code", "paper-reference",
 }
 
@@ -113,7 +86,7 @@ def load_ground_truth(json_path: str | Path) -> dict[str, list[GroundTruthFindin
     """Load ground truth from a flat JSON array.
 
     Returns findings grouped by normalized entry_id. Each object must have
-    the 8 required fields plus an optional ``issue-id``. If ``issue-id`` is
+    the 7 required fields plus an optional ``issue-id``. If ``issue-id`` is
     absent it is synthesized as ``{entry-id}-{index}``.
     """
     with open(json_path, encoding="utf-8") as f:
@@ -139,20 +112,11 @@ def load_ground_truth(json_path: str | Path) -> dict[str, list[GroundTruthFindin
             _entry_counters[entry_id_raw] += 1
             issue_id = f"{entry_id_raw}-{_entry_counters[entry_id_raw]:02d}"
 
-        context = f"GT finding #{i} ({issue_id or entry_id_raw})"
-
-        severity_raw = str(obj["severity"]).strip()
-        category_raw = str(obj["category"]).strip()
-        concern_raw = str(obj["security-concern"]).strip()
-
         finding = GroundTruthFinding(
             entry_id=entry_id_raw,
             issue_id=issue_id,
             issue_name=str(obj["issue-name"]).strip(),
             issue_explanation=str(obj["issue-explanation"]).strip(),
-            severity=_validate_severity(severity_raw, context),
-            category=_validate_category(category_raw, context),
-            security_concern=_validate_security_concern(concern_raw, context),
             relevant_code=parse_code_refs(str(obj.get("relevant-code", "") or "")),
             paper_reference=str(obj.get("paper-reference", "") or "").strip(),
         )
@@ -167,7 +131,6 @@ def load_ground_truth(json_path: str | Path) -> dict[str, list[GroundTruthFindin
 
 _REQUIRED_AGENT_FIELDS = {
     "entry-id", "issue-name", "issue-explanation",
-    "severity", "category", "security-concern",
     "relevant-code", "paper-reference",
 }
 
@@ -191,19 +154,11 @@ def load_agent_output(json_path: str | Path) -> dict[str, list[AgentFinding]]:
             raise ValueError(f"Agent finding #{i}: missing required fields: {missing}")
 
         entry_id_raw = str(obj["entry-id"]).strip()
-        context = f"Agent finding #{i} ({entry_id_raw})"
-
-        severity = str(obj["severity"]).strip()
-        category = str(obj["category"]).strip()
-        concern = str(obj["security-concern"]).strip()
 
         finding = AgentFinding(
             entry_id=entry_id_raw,
             issue_name=str(obj["issue-name"]).strip(),
             issue_explanation=str(obj["issue-explanation"]).strip(),
-            severity=_validate_severity(severity, context),
-            category=_validate_category(category, context),
-            security_concern=_validate_security_concern(concern, context),
             relevant_code=parse_code_refs(str(obj.get("relevant-code", "") or "")),
             paper_reference=str(obj.get("paper-reference", "") or "").strip(),
         )

@@ -54,7 +54,7 @@ def _render_one_trace(
     """Render one agent-finding section. Returns list of markdown lines."""
     lines: list[str] = []
     af = trace.agent
-    header = f"### Agent finding [{trace.agent_index}]: \"{af.issue_name}\" ({af.severity})"
+    header = f"### Agent finding [{trace.agent_index}]: \"{af.issue_name}\""
     lines.append(header)
     lines.append("")
 

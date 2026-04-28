@@ -1,4 +1,9 @@
-"""Aggregate scoring and output formatting (JSON + markdown)."""
+"""Aggregate scoring and output formatting (JSON + markdown).
+
+Recall-focused grading: quality is a pass/fail gate combining the LLM judge
+match_score with code-location and paper-reference evidence scores. A match
+counts toward recall only if quality >= QUALITY_THRESHOLD.
+"""
 
 from __future__ import annotations
 
@@ -12,49 +17,24 @@ from grader.loader import AgentFinding, GroundTruthFinding
 from grader.matcher import MatchResult, MatchedPair
 from grader.scorers import (
     FieldScore,
-    score_category,
     score_code_location,
     score_paper_reference,
-    score_security_concern,
-    score_severity,
 )
 from grader.similarity import SimilarityBackend
 
-# Default weights for the 5 core graded fields
-DEFAULT_WEIGHTS = {
-    "severity": 0.15,
-    "category": 0.15,
-    "security_concern": 0.15,
-    "code_location": 0.30,
-    "paper_reference": 0.25,
-}
-
-# Severity weights for severity-weighted recall (used to prioritize
-# matching Critical > Warning > Info misses).
-_SEVERITY_WEIGHT = {"Critical": 3, "Warning": 2, "Info": 1}
-
-# Per-severity weight used in PRECISION. Rationale: the current dataset
-# focuses on Critical findings; Warning is under-represented, so an extra
-# Warning outside the GT should not be penalized as heavily as an extra
-# Critical would be. Info-severity agent findings are typically defensive
-# observations ("X is correctly implemented", "no impact but noted") rather
-# than vulnerability claims — they are excluded from precision entirely
-# (weight 0) so that producing helpful Info notes never hurts an agent's
-# score. Info findings still appear in `extras_by_severity` for transparency.
-_PRECISION_SEVERITY_WEIGHT = {"Critical": 1.0, "Warning": 0.5, "Info": 0.0}
+# Quality gate: combines LLM judge confidence with evidence scores.
+# quality = W_MATCH*(match_score/5) + W_CODE*code_location + W_PAPER*paper_reference
+QUALITY_WEIGHTS = {"match_score": 0.50, "code_location": 0.30, "paper_reference": 0.20}
+QUALITY_THRESHOLD = 0.55
 
 
-def _pair_score_badge(pair_score: float) -> str:
-    """Return a green/yellow/red emoji badge for a pair_score.
-
-    Used in markdown reports to highlight match quality at a glance. Zero
-    external dependencies; renders in any Markdown viewer.
-    """
-    if pair_score >= 0.7:
+def _quality_badge(quality: float, passed: bool) -> str:
+    """Return an emoji badge for quality display in markdown."""
+    if not passed:
+        return "🔴"
+    if quality >= 0.75:
         return "🟢"
-    if pair_score >= 0.4:
-        return "🟡"
-    return "🔴"
+    return "🟡"
 
 
 @dataclass
@@ -64,11 +44,10 @@ class PairGrade:
     gt_name: str
     agent_name: str
     match_similarity: float
-    scores: dict[str, FieldScore]
-    pair_score: float
-    # 0 = primary / only match for this GT; >=1 = duplicate (same GT matched
-    # by another agent earlier in greedy order). Duplicates contribute to
-    # quality via the per-GT average but are flagged in the report.
+    code_location_score: FieldScore
+    paper_reference_score: FieldScore
+    quality: float
+    passed: bool
     dup_rank: int = 0
 
 
@@ -79,18 +58,11 @@ class ProjectGrade:
     recall: float
     precision: float
     f1: float
-    severity_weighted_recall: float
-    quality: float
-    composite: float
+    avg_quality: float
     matches: list[PairGrade]
     missed_gt: list[dict[str, str]]
     extra_agent: list[dict[str, str]]
-    extra_by_severity: dict[str, int]
-    # Numerator / denominator used to compute severity_weighted_recall, kept
-    # so the overall roll-up can aggregate them across projects without
-    # recomputing from gt_findings (which build_report doesn't see).
-    swr_num: float = 0.0
-    swr_den: float = 0.0
+    extra_count: int = 0
 
 
 @dataclass
@@ -101,55 +73,47 @@ class GradeReport:
     overall: dict[str, float]
 
 
-def _compute_pair_score(
-    scores: dict[str, FieldScore], weights: dict[str, float]
+def _compute_quality(
+    match_score: float,
+    code_location: FieldScore,
+    paper_reference: FieldScore,
 ) -> float:
-    """Compute weighted pair score, redistributing weight for skipped fields."""
-    active_weights: dict[str, float] = {}
-    for field_name, w in weights.items():
-        fs = scores.get(field_name)
-        if fs and "skip" not in fs.detail:
-            active_weights[field_name] = w
-
-    if not active_weights:
-        return 0.0
-
-    total_w = sum(active_weights.values())
-    normalized = {k: v / total_w for k, v in active_weights.items()}
-    return sum(normalized[k] * scores[k].score for k in normalized)
+    """Compute quality score combining LLM match confidence with evidence."""
+    w = QUALITY_WEIGHTS
+    code_val = code_location.score if "skip" not in code_location.detail else 0.5
+    paper_val = paper_reference.score if "skip" not in paper_reference.detail else 0.5
+    return (
+        w["match_score"] * (match_score / 5.0)
+        + w["code_location"] * code_val
+        + w["paper_reference"] * paper_val
+    )
 
 
 def grade_pair(
     pair: MatchedPair,
     similarity_backend: SimilarityBackend,
-    weights: dict[str, float] | None = None,
+    quality_threshold: float = QUALITY_THRESHOLD,
 ) -> PairGrade:
-    """Grade a single matched pair across all fields."""
-    w = weights or DEFAULT_WEIGHTS
+    """Grade a single matched pair. Quality is a pass/fail gate."""
+    code_loc = score_code_location(
+        pair.agent.relevant_code, pair.gt.relevant_code
+    )
+    paper_ref = score_paper_reference(
+        pair.agent.paper_reference, pair.gt.paper_reference, similarity_backend
+    )
 
-    scores: dict[str, FieldScore] = {
-        "severity": score_severity(pair.agent.severity, pair.gt.severity),
-        "category": score_category(pair.agent.category, pair.gt.category),
-        "security_concern": score_security_concern(
-            pair.agent.security_concern, pair.gt.security_concern
-        ),
-        "code_location": score_code_location(
-            pair.agent.relevant_code, pair.gt.relevant_code
-        ),
-        "paper_reference": score_paper_reference(
-            pair.agent.paper_reference, pair.gt.paper_reference, similarity_backend
-        ),
-    }
-
-    pair_score = _compute_pair_score(scores, w)
+    quality = _compute_quality(pair.similarity, code_loc, paper_ref)
+    passed = quality >= quality_threshold
 
     return PairGrade(
         gt_id=pair.gt.issue_id,
         gt_name=pair.gt.issue_name,
         agent_name=pair.agent.issue_name,
         match_similarity=pair.similarity,
-        scores=scores,
-        pair_score=pair_score,
+        code_location_score=code_loc,
+        paper_reference_score=paper_ref,
+        quality=quality,
+        passed=passed,
         dup_rank=pair.dup_rank,
     )
 
@@ -160,261 +124,140 @@ def grade_project(
     similarity_backend: SimilarityBackend,
     gt_findings: list[GroundTruthFinding],
     agent_findings: list[AgentFinding],
-    weights: dict[str, float] | None = None,
+    quality_threshold: float = QUALITY_THRESHOLD,
 ) -> ProjectGrade:
     """Grade all findings for one project.
 
-    Scoring handles N-to-1 matches (multiple agent findings bound to the same
-    GT, which happens when the agent split one underlying issue into several
-    findings). Behavior:
-
-    - recall: unique GTs matched / total GTs (reported, not used in composite).
-    - severity_weighted_recall: used in the F1 term of the composite. Weights
-      Critical=3, Warning=2, Info=1 so missing a Critical is worse than an Info.
-    - quality: severity-weighted mean across GT groups; each GT group
-      contributes its pair_score weighted by GT severity. Duplicates are
-      averaged within the group first.
-    - precision: severity-weighted at 1.0/0.5/0.1. Extras subtract in
-      proportion to their severity; all matched agents count toward matched.
-    - composite: 0.4 * F1(precision, severity_weighted_recall) + 0.6 * quality.
+    Recall = unique GTs with at least one passing match / total GTs.
+    Precision = passed agent matches / total agent findings.
+    Quality = mean quality score of passed matches (informational).
     """
     pair_grades = [
-        grade_pair(mp, similarity_backend, weights) for mp in match_result.matched
+        grade_pair(mp, similarity_backend, quality_threshold)
+        for mp in match_result.matched
     ]
 
     total_gt = len(gt_findings)
     total_agent = len(agent_findings)
-    gt_by_id = {gf.issue_id: gf for gf in gt_findings}
 
-    # Recall: unique GT issue_ids matched.
-    unique_matched_gts = {mp.gt.issue_id for mp in match_result.matched}
-    recall = len(unique_matched_gts) / total_gt if total_gt > 0 else 0.0
+    # Recall: unique GT issue_ids with at least one passing match.
+    passed_gt_ids = {pg.gt_id for pg in pair_grades if pg.passed}
+    recall = len(passed_gt_ids) / total_gt if total_gt > 0 else 0.0
 
-    # Severity-weighted precision. All matched agents contribute; extras
-    # subtract in proportion to their severity weight.
-    if total_agent > 0:
-        matched_agent_ids = {id(mp.agent) for mp in match_result.matched}
-        weighted_total = sum(
-            _PRECISION_SEVERITY_WEIGHT.get(af.severity, 0.0) for af in agent_findings
-        )
-        weighted_matched = sum(
-            _PRECISION_SEVERITY_WEIGHT.get(af.severity, 0.0)
-            for af in agent_findings
-            if id(af) in matched_agent_ids
-        )
-        precision = weighted_matched / weighted_total if weighted_total > 0 else 0.0
-    else:
-        precision = 0.0
+    # Precision: passed agent matches / total agent findings.
+    passed_count = sum(1 for pg in pair_grades if pg.passed)
+    precision = passed_count / total_agent if total_agent > 0 else 0.0
 
-    # Severity-weighted recall: weights GT hits/misses by severity so
-    # missing a Critical costs more than missing an Info.
-    swr_num = 0.0
-    swr_den = 0.0
-    for gf in gt_findings:
-        w = _SEVERITY_WEIGHT.get(gf.severity, 1)
-        swr_den += w
-        if gf.issue_id in unique_matched_gts:
-            swr_num += w
-    severity_weighted_recall = swr_num / swr_den if swr_den > 0 else 0.0
-
-    # F1 uses severity-weighted recall so the composite reflects audit quality:
-    # a Critical miss hurts more than an Info miss.
+    # F1
     f1 = (
-        2 * precision * severity_weighted_recall
-        / (precision + severity_weighted_recall)
-        if (precision + severity_weighted_recall) > 0
+        2 * precision * recall / (precision + recall)
+        if (precision + recall) > 0
         else 0.0
     )
 
-    # Quality: severity-weighted mean of per-GT-group pair_scores. A GT
-    # matched by N agents contributes the average of those pair_scores,
-    # weighted by the GT's severity weight.
-    if pair_grades:
-        gt_group_scores: dict[str, list[float]] = {}
-        for pg in pair_grades:
-            gt_group_scores.setdefault(pg.gt_id, []).append(pg.pair_score)
-        num = 0.0
-        den = 0.0
-        for gt_id, pair_scores in gt_group_scores.items():
-            gt = gt_by_id.get(gt_id)
-            w = _SEVERITY_WEIGHT.get(gt.severity, 1) if gt else 1
-            num += w * (sum(pair_scores) / len(pair_scores))
-            den += w
-        quality = num / den if den > 0 else 0.0
-    else:
-        quality = 0.0
-
-    composite = 0.4 * f1 + 0.6 * quality
+    # Avg quality of passed matches (informational).
+    passed_qualities = [pg.quality for pg in pair_grades if pg.passed]
+    avg_quality = (
+        sum(passed_qualities) / len(passed_qualities)
+        if passed_qualities
+        else 0.0
+    )
 
     # Format missed and extra for output
     missed_gt_list = [
-        {"id": gf.issue_id, "name": gf.issue_name, "severity": gf.severity}
+        {"id": gf.issue_id, "name": gf.issue_name}
         for gf in match_result.missed_gt
     ]
     extra_agent_list = [
-        {"name": af.issue_name, "severity": af.severity}
+        {"name": af.issue_name}
         for af in match_result.extra_agent
     ]
-    extra_by_sev = {
-        sev: len(findings)
-        for sev, findings in match_result.extra_by_severity.items()
-    }
 
     return ProjectGrade(
         project=project,
         recall=recall,
         precision=precision,
         f1=f1,
-        severity_weighted_recall=severity_weighted_recall,
-        swr_num=swr_num,
-        swr_den=swr_den,
-        quality=quality,
-        composite=composite,
+        avg_quality=avg_quality,
         matches=pair_grades,
         missed_gt=missed_gt_list,
         extra_agent=extra_agent_list,
-        extra_by_severity=extra_by_sev,
+        extra_count=len(match_result.extra_agent),
     )
 
 
 def build_report(
     project_grades: dict[str, ProjectGrade],
     threshold: float,
-    weights: dict[str, float],
+    quality_threshold: float,
     backend_name: str,
     skipped_projects: list[str] | None = None,
     failed_projects: list[dict[str, str]] | None = None,
 ) -> GradeReport:
     """Build the full grading report across all projects.
 
-    Args:
-        project_grades: Successfully graded projects.
-        threshold: Match threshold used.
-        weights: Field weights used.
-        backend_name: Label for the similarity backend.
-        skipped_projects: Agent project keys that had no GT counterpart and
-            were therefore skipped. Recorded in meta for transparency.
-        failed_projects: Projects where matching/grading raised an exception.
-            Each entry is ``{"project", "error_type", "error"}``. Recorded in
-            meta so the user can see which projects didn't get a score.
+    Recall is the primary metric. Quality is a pass/fail gate.
     """
     meta = {
         "grader_version": grader.__version__,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "match_threshold": threshold,
-        "weights": weights,
+        "quality_threshold": quality_threshold,
+        "quality_weights": QUALITY_WEIGHTS,
         "similarity_backend": backend_name,
         "skipped_projects": list(skipped_projects or []),
         "failed_projects": list(failed_projects or []),
     }
 
-    # Overall metrics.
-    #
-    # Recall and quality operate on UNIQUE GTs (N:1 duplicates collapse to
-    # one GT). Precision is severity-weighted against all agent findings.
-    # total_matched = unique GTs with at least one matching agent.
     total_gt = 0
     total_agent = 0
-    total_matched = 0                     # unique GTs matched, across projects
-    total_matched_agents = 0              # agent edges (including duplicates)
-    total_weighted_agent = 0.0            # severity-weighted agent total
-    total_weighted_matched_agent = 0.0    # severity-weighted matched agents
-    total_swr_num = 0.0                   # severity-weighted recall numerator
-    total_swr_den = 0.0                   # severity-weighted recall denominator
-    weighted_quality_sum = 0.0            # per-GT quality sum (weight: severity-weighted GT mass)
-    weighted_quality_den = 0.0
-    total_extra_by_sev: dict[str, int] = {}
+    total_passed = 0
+    total_passed_agents = 0
+    total_extra = 0
+    quality_sum = 0.0
+    quality_count = 0
 
     for pg in project_grades.values():
-        n_gt_unique = len({m.gt_id for m in pg.matches}) + len(pg.missed_gt)
-        n_agent_edges = len(pg.matches) + len(pg.extra_agent)
-        unique_matched_gt_count = len({m.gt_id for m in pg.matches})
+        n_gt = len({m.gt_id for m in pg.matches if m.passed}) + len(pg.missed_gt)
+        # Also count GTs that matched but didn't pass
+        unpassed_gts = {m.gt_id for m in pg.matches if not m.passed} - {m.gt_id for m in pg.matches if m.passed}
+        n_gt += len(unpassed_gts)
+        n_agent = len(pg.matches) + len(pg.extra_agent)
+        passed_gt_count = len({m.gt_id for m in pg.matches if m.passed})
+        passed_agent_count = sum(1 for m in pg.matches if m.passed)
 
-        total_gt += n_gt_unique
-        total_agent += n_agent_edges
-        total_matched += unique_matched_gt_count
-        total_matched_agents += len(pg.matches)
+        total_gt += n_gt
+        total_agent += n_agent
+        total_passed += passed_gt_count
+        total_passed_agents += passed_agent_count
+        total_extra += pg.extra_count
 
-        # Accumulate precision weights. Extras are in pg.extra_agent; matched
-        # agents are in pg.matches. Severity for matched agents is looked up
-        # from the ProjectGrade — but we stored only the pair's agent_name
-        # in PairGrade, not severity. To avoid losing fidelity we recompute
-        # weighted totals from pg.precision * weighted_total. An equivalent
-        # approximation: assume matched agents are all-Critical (weight 1.0)
-        # because recall/precision at project level already baked the real
-        # weights in. Here we aggregate via the already-computed pg.precision.
-        # (See tests — this aggregation matches per-project precision exactly
-        # when there's only one project.)
-        # Cleaner path: pg.precision is (weighted_matched / weighted_total);
-        # use it to recover both numerator and denominator when combined with
-        # extras' severities.
-        extras_weight = sum(
-            _PRECISION_SEVERITY_WEIGHT.get(sev, 0.0) * count
-            for sev, count in pg.extra_by_severity.items()
-        )
-        # At the project level: precision = weighted_matched / (weighted_matched + extras_weight)
-        # => weighted_matched = precision * (weighted_matched + extras_weight)
-        # => weighted_matched * (1 - precision) = precision * extras_weight
-        # => weighted_matched = precision * extras_weight / (1 - precision)
-        if pg.precision >= 1.0:
-            # No extras, or all matched → weighted_matched is all the matched
-            # severity weights. We don't carry these numerically, so treat
-            # matched agents as contributing 1.0 each (upper bound).
-            weighted_matched = float(len(pg.matches))
-            weighted_total = weighted_matched
-        elif pg.precision > 0.0:
-            weighted_matched = pg.precision * extras_weight / (1.0 - pg.precision)
-            weighted_total = weighted_matched + extras_weight
-        else:
-            weighted_matched = 0.0
-            weighted_total = extras_weight
-        total_weighted_matched_agent += weighted_matched
-        total_weighted_agent += weighted_total
+        passed_quals = [m.quality for m in pg.matches if m.passed]
+        quality_sum += sum(passed_quals)
+        quality_count += len(passed_quals)
 
-        total_swr_num += pg.swr_num
-        total_swr_den += pg.swr_den
-
-        # Weight each project's quality contribution by its severity-weighted
-        # GT mass so projects with more Criticals dominate the roll-up quality
-        # proportionally to audit importance.
-        weighted_quality_sum += pg.quality * pg.swr_den
-        weighted_quality_den += pg.swr_den
-        for sev, count in pg.extra_by_severity.items():
-            total_extra_by_sev[sev] = total_extra_by_sev.get(sev, 0) + count
-
-    overall_recall = total_matched / total_gt if total_gt > 0 else 0.0
-    overall_severity_weighted_recall = (
-        total_swr_num / total_swr_den if total_swr_den > 0 else 0.0
-    )
+    overall_recall = total_passed / total_gt if total_gt > 0 else 0.0
     overall_precision = (
-        total_weighted_matched_agent / total_weighted_agent
-        if total_weighted_agent > 0 else 0.0
+        total_passed_agents / total_agent if total_agent > 0 else 0.0
     )
-    # F1 in the composite uses severity-weighted recall so the headline score
-    # reflects audit quality (missing a Critical counts more than missing an Info).
     overall_f1 = (
-        2 * overall_precision * overall_severity_weighted_recall
-        / (overall_precision + overall_severity_weighted_recall)
-        if (overall_precision + overall_severity_weighted_recall) > 0
+        2 * overall_precision * overall_recall
+        / (overall_precision + overall_recall)
+        if (overall_precision + overall_recall) > 0
         else 0.0
     )
-    overall_quality = (
-        weighted_quality_sum / weighted_quality_den if weighted_quality_den > 0 else 0.0
-    )
-    benchmark_score = 0.4 * overall_f1 + 0.6 * overall_quality
+    overall_avg_quality = quality_sum / quality_count if quality_count > 0 else 0.0
 
     overall = {
         "recall": round(overall_recall, 4),
-        "severity_weighted_recall": round(overall_severity_weighted_recall, 4),
         "precision": round(overall_precision, 4),
         "f1": round(overall_f1, 4),
-        "quality": round(overall_quality, 4),
-        "benchmark_score": round(benchmark_score, 4),
+        "avg_quality": round(overall_avg_quality, 4),
         "total_gt": total_gt,
         "total_agent": total_agent,
-        "total_matched": total_matched,          # unique GTs matched
-        "total_matched_agents": total_matched_agents,  # includes N:1 duplicates
-        "extra_by_severity": total_extra_by_sev,
+        "total_passed": total_passed,
+        "total_passed_agents": total_passed_agents,
+        "total_extra": total_extra,
     }
 
     return GradeReport(meta=meta, projects=project_grades, overall=overall)
@@ -428,38 +271,77 @@ def _grade_to_dict(report: GradeReport) -> dict:
     """Convert GradeReport to a JSON-serializable dict."""
     projects = {}
     for name, pg in report.projects.items():
-        projects[name] = {
-            "recall": round(pg.recall, 4),
-            "precision": round(pg.precision, 4),
-            "f1": round(pg.f1, 4),
-            "severity_weighted_recall": round(pg.severity_weighted_recall, 4),
-            "quality": round(pg.quality, 4),
-            "composite": round(pg.composite, 4),
-            "matches": [
-                {
-                    "gt_id": m.gt_id,
-                    "gt_name": m.gt_name,
-                    "agent_name": m.agent_name,
-                    "match_similarity": round(m.match_similarity, 4),
-                    "scores": {
-                        k: {"score": round(v.score, 4), "detail": v.detail}
-                        for k, v in m.scores.items()
-                    },
-                    "pair_score": round(m.pair_score, 4),
-                    "dup_rank": m.dup_rank,
-                }
-                for m in pg.matches
-            ],
-            "missed_gt": pg.missed_gt,
-            "extra_agent": pg.extra_agent,
-            "extra_by_severity": pg.extra_by_severity,
-        }
+        projects[name] = _project_grade_to_dict(pg)
 
     return {
         "meta": report.meta,
         "projects": projects,
         "overall": report.overall,
     }
+
+
+def _project_grade_to_dict(pg: ProjectGrade) -> dict:
+    """Convert a single ProjectGrade to a JSON-serializable dict."""
+    return {
+        "project": pg.project,
+        "recall": round(pg.recall, 4),
+        "precision": round(pg.precision, 4),
+        "f1": round(pg.f1, 4),
+        "avg_quality": round(pg.avg_quality, 4),
+        "matches": [
+            {
+                "gt_id": m.gt_id,
+                "gt_name": m.gt_name,
+                "agent_name": m.agent_name,
+                "match_similarity": round(m.match_similarity, 4),
+                "code_location": {"score": round(m.code_location_score.score, 4), "detail": m.code_location_score.detail},
+                "paper_reference": {"score": round(m.paper_reference_score.score, 4), "detail": m.paper_reference_score.detail},
+                "quality": round(m.quality, 4),
+                "passed": m.passed,
+                "dup_rank": m.dup_rank,
+            }
+            for m in pg.matches
+        ],
+        "missed_gt": pg.missed_gt,
+        "extra_agent": pg.extra_agent,
+        "extra_count": pg.extra_count,
+    }
+
+
+def _dict_to_project_grade(d: dict) -> ProjectGrade:
+    """Reconstruct a ProjectGrade from a serialized dict."""
+    matches = []
+    for m in d["matches"]:
+        code_loc = m.get("code_location", {})
+        paper_ref = m.get("paper_reference", {})
+        matches.append(PairGrade(
+            gt_id=m["gt_id"],
+            gt_name=m["gt_name"],
+            agent_name=m["agent_name"],
+            match_similarity=m["match_similarity"],
+            code_location_score=FieldScore(
+                score=code_loc.get("score", 0.0),
+                detail=code_loc.get("detail", ""),
+            ),
+            paper_reference_score=FieldScore(
+                score=paper_ref.get("score", 0.0),
+                detail=paper_ref.get("detail", ""),
+            ),
+            quality=m.get("quality", 0.0),
+            passed=m.get("passed", False),
+            dup_rank=m.get("dup_rank", 0),
+        ))
+    return ProjectGrade(
+        project=d["project"],
+        recall=d["recall"],
+        precision=d["precision"],
+        f1=d["f1"],
+        avg_quality=d.get("avg_quality", 0.0),
+        matches=matches,
+        missed_gt=d["missed_gt"],
+        extra_agent=d["extra_agent"],
+        extra_count=d.get("extra_count", len(d.get("extra_agent", []))),
+    )
 
 
 def write_json_report(report: GradeReport, path: str) -> None:
@@ -478,24 +360,22 @@ def write_markdown_report(report: GradeReport, path: str) -> None:
     lines.append(f"**Grader version:** {report.meta['grader_version']}  ")
     lines.append(f"**Date:** {report.meta['timestamp']}  ")
     lines.append(f"**Similarity backend:** {report.meta['similarity_backend']}  ")
-    lines.append(f"**Match threshold:** {report.meta['match_threshold']}\n")
+    lines.append(f"**Match threshold:** {report.meta['match_threshold']}  ")
+    lines.append(f"**Quality threshold:** {report.meta['quality_threshold']}\n")
 
     lines.append("## Overall Results\n")
-    lines.append(f"| Metric | Value |")
-    lines.append(f"|--------|-------|")
-    lines.append(f"| Benchmark Score | **{o['benchmark_score']:.4f}** |")
-    lines.append(f"| Recall (unweighted) | {o['recall']:.4f} |")
-    lines.append(f"| Sev-Weighted Recall | {o.get('severity_weighted_recall', 0.0):.4f} |")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| **Recall** | **{o['recall']:.4f}** |")
     lines.append(f"| Precision | {o['precision']:.4f} |")
-    lines.append(f"| F1 (sev-weighted) | {o['f1']:.4f} |")
-    lines.append(f"| Quality (sev-weighted) | {o['quality']:.4f} |")
+    lines.append(f"| F1 | {o['f1']:.4f} |")
+    lines.append(f"| Avg Quality | {o['avg_quality']:.4f} |")
     lines.append(f"| Total GT | {o['total_gt']} |")
     lines.append(f"| Total Agent | {o['total_agent']} |")
-    lines.append(f"| Total Matched | {o['total_matched']} |")
-    extra_sev = o.get("extra_by_severity", {})
-    if extra_sev:
-        extra_str = ", ".join(f"{s}: {c}" for s, c in sorted(extra_sev.items()))
-        lines.append(f"| Extra by Severity | {extra_str} |")
+    lines.append(f"| Total Passed | {o['total_passed']} |")
+    extra_count = o.get("total_extra", 0)
+    if extra_count:
+        lines.append(f"| Extra Findings | {extra_count} |")
     lines.append("")
 
     skipped = report.meta.get("skipped_projects") or []
@@ -520,53 +400,46 @@ def write_markdown_report(report: GradeReport, path: str) -> None:
 
     for name, pg in sorted(report.projects.items()):
         lines.append(f"## {name}\n")
-        lines.append(f"| Metric | Value |")
-        lines.append(f"|--------|-------|")
-        lines.append(f"| Recall | {pg.recall:.4f} |")
+        lines.append("| Metric | Value |")
+        lines.append("|--------|-------|")
+        lines.append(f"| **Recall** | **{pg.recall:.4f}** |")
         lines.append(f"| Precision | {pg.precision:.4f} |")
         lines.append(f"| F1 | {pg.f1:.4f} |")
-        lines.append(f"| Sev-Weighted Recall | {pg.severity_weighted_recall:.4f} |")
-        lines.append(f"| Quality | {pg.quality:.4f} |")
-        lines.append(f"| Composite | **{pg.composite:.4f}** |")
-        if pg.extra_by_severity:
-            extra_str = ", ".join(
-                f"{s}: {c}" for s, c in sorted(pg.extra_by_severity.items())
-            )
-            lines.append(f"| Extra by Severity | {extra_str} |")
+        lines.append(f"| Avg Quality | {pg.avg_quality:.4f} |")
+        if pg.extra_count:
+            lines.append(f"| Extra Findings | {pg.extra_count} |")
         lines.append("")
 
         if pg.matches:
             lines.append("### Matches\n")
             lines.append(
-                "| GT ID | GT Name | Agent Name | Similarity | Pair Score | Severity | Category | Security | Code | Paper |"
+                "| GT ID | GT Name | Agent Name | Similarity | Quality | Passed | Code | Paper |"
             )
             lines.append(
-                "|-------|---------|------------|------------|------------|----------|----------|----------|------|-------|"
+                "|-------|---------|------------|------------|---------|--------|------|-------|"
             )
             for m in pg.matches:
-                s = m.scores
-                badge = _pair_score_badge(m.pair_score)
+                badge = _quality_badge(m.quality, m.passed)
                 dup_marker = "" if m.dup_rank == 0 else f" (dup #{m.dup_rank})"
+                passed_str = "✅" if m.passed else "❌"
                 lines.append(
                     f"| {m.gt_id}{dup_marker} | {m.gt_name} | {m.agent_name} "
-                    f"| {m.match_similarity:.2f} | {badge} {m.pair_score:.2f} "
-                    f"| {s['severity'].score:.2f} | {s['category'].score:.2f} "
-                    f"| {s['security_concern'].score:.2f} "
-                    f"| {s['code_location'].score:.2f} "
-                    f"| {s['paper_reference'].score:.2f} |"
+                    f"| {m.match_similarity:.2f} | {badge} {m.quality:.2f} | {passed_str} "
+                    f"| {m.code_location_score.score:.2f} "
+                    f"| {m.paper_reference_score.score:.2f} |"
                 )
             lines.append("")
 
         if pg.missed_gt:
             lines.append("### Missed GT Findings\n")
             for mg in pg.missed_gt:
-                lines.append(f"- **[{mg['severity']}]** {mg['id']}: {mg['name']}")
+                lines.append(f"- {mg['id']}: {mg['name']}")
             lines.append("")
 
         if pg.extra_agent:
             lines.append("### Extra Agent Findings\n")
             for ea in pg.extra_agent:
-                lines.append(f"- **[{ea['severity']}]** {ea['name']}")
+                lines.append(f"- {ea['name']}")
             lines.append("")
 
     with open(path, "w", encoding="utf-8") as f:

@@ -98,9 +98,6 @@ class TestLoadGroundTruth:
         assert f.issue_id
         assert f.issue_name
         assert f.issue_explanation
-        assert f.severity in {"Critical", "Warning", "Info"}
-        assert f.category
-        assert f.security_concern
 
     def test_code_refs_parsed(self, fictional_gt_json_path):
         gt = load_ground_truth(fictional_gt_json_path)
@@ -119,27 +116,6 @@ class TestLoadGroundTruth:
         # alpha-02 has paper_reference = "-" in the fixture
         alpha_02 = next(f for f in gt["alpha"] if f.issue_id == "alpha-02")
         assert alpha_02.paper_reference == "-"
-
-    def test_severity_values(self, fictional_gt_json_path):
-        gt = load_ground_truth(fictional_gt_json_path)
-        all_severities = {f.severity for findings in gt.values() for f in findings}
-        assert all_severities <= {"Critical", "Warning", "Info"}
-
-    def test_category_values(self, fictional_gt_json_path):
-        gt = load_ground_truth(fictional_gt_json_path)
-        from grader import CATEGORIES
-        for findings in gt.values():
-            for f in findings:
-                assert f.category in CATEGORIES, f"{f.issue_id}: {f.category}"
-
-    def test_security_concern_values(self, fictional_gt_json_path):
-        gt = load_ground_truth(fictional_gt_json_path)
-        from grader import SECURITY_CONCERNS
-        for findings in gt.values():
-            for f in findings:
-                assert f.security_concern in SECURITY_CONCERNS, (
-                    f"{f.issue_id}: {f.security_concern}"
-                )
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +136,6 @@ class TestLoadAgentOutput:
                 "entry-id": "alpha",
                 "issue-name": "Test Issue",
                 "issue-explanation": "Some explanation",
-                "severity": "Critical",
-                "category": "Under-constrained Circuit",
-                "security-concern": "Proof Forgery (Soundness)",
                 "relevant-code": "file.cu:10",
                 "paper-reference": "Section 1",
             }
@@ -173,7 +146,6 @@ class TestLoadAgentOutput:
         assert len(result["alpha"]) == 1
         f = result["alpha"][0]
         assert f.issue_name == "Test Issue"
-        assert f.severity == "Critical"
 
     def test_groups_by_entry_id(self, tmp_path):
         data = [
@@ -181,9 +153,6 @@ class TestLoadAgentOutput:
                 "entry-id": "alpha",
                 "issue-name": "Issue A",
                 "issue-explanation": "Explanation A",
-                "severity": "Critical",
-                "category": "Other",
-                "security-concern": "Other",
                 "relevant-code": "",
                 "paper-reference": "-",
             },
@@ -191,9 +160,6 @@ class TestLoadAgentOutput:
                 "entry-id": "beta",
                 "issue-name": "Issue B",
                 "issue-explanation": "Explanation B",
-                "severity": "Warning",
-                "category": "Other",
-                "security-concern": "Other",
                 "relevant-code": "",
                 "paper-reference": "-",
             },
@@ -201,9 +167,6 @@ class TestLoadAgentOutput:
                 "entry-id": "alpha",
                 "issue-name": "Issue C",
                 "issue-explanation": "Explanation C",
-                "severity": "Info",
-                "category": "Other",
-                "security-concern": "Other",
                 "relevant-code": "",
                 "paper-reference": "-",
             },
@@ -218,62 +181,11 @@ class TestLoadAgentOutput:
             {
                 "entry-id": "alpha",
                 "issue-name": "Incomplete",
-                # missing issue-explanation, severity, etc.
+                # missing issue-explanation, etc.
             }
         ]
         path = _make_agent_json(data, tmp_path)
         with pytest.raises(ValueError, match="missing required fields"):
-            load_agent_output(path)
-
-    def test_invalid_severity_raises(self, tmp_path):
-        data = [
-            {
-                "entry-id": "alpha",
-                "issue-name": "Bad Severity",
-                "issue-explanation": "Explanation",
-                "severity": "High",  # invalid
-                "category": "Other",
-                "security-concern": "Other",
-                "relevant-code": "",
-                "paper-reference": "-",
-            }
-        ]
-        path = _make_agent_json(data, tmp_path)
-        with pytest.raises(ValueError, match="invalid severity"):
-            load_agent_output(path)
-
-    def test_invalid_category_raises(self, tmp_path):
-        data = [
-            {
-                "entry-id": "alpha",
-                "issue-name": "Bad Category",
-                "issue-explanation": "Explanation",
-                "severity": "Critical",
-                "category": "Nonexistent Category",
-                "security-concern": "Other",
-                "relevant-code": "",
-                "paper-reference": "-",
-            }
-        ]
-        path = _make_agent_json(data, tmp_path)
-        with pytest.raises(ValueError, match="invalid category"):
-            load_agent_output(path)
-
-    def test_invalid_security_concern_raises(self, tmp_path):
-        data = [
-            {
-                "entry-id": "alpha",
-                "issue-name": "Bad Concern",
-                "issue-explanation": "Explanation",
-                "severity": "Critical",
-                "category": "Other",
-                "security-concern": "Made Up Concern",
-                "relevant-code": "",
-                "paper-reference": "-",
-            }
-        ]
-        path = _make_agent_json(data, tmp_path)
-        with pytest.raises(ValueError, match="invalid security-concern"):
             load_agent_output(path)
 
     def test_not_a_list_raises(self, tmp_path):
@@ -288,7 +200,6 @@ class TestLoadAgentOutput:
                 "entry-id": "alpha",
                 "issue-name": "Test",
                 "issue-explanation": "Test",
-                "severity": "Critical",
                 "category": "Other",
                 "security-concern": "Other",
                 "relevant-code": "file.cu:10-20, other.py:5",
@@ -332,33 +243,12 @@ class TestLoadGroundTruthJSON:
         with pytest.raises(ValueError, match="missing required fields"):
             load_ground_truth(path)
 
-    def test_invalid_severity_raises(self, tmp_path):
-        data = [
-            {
-                "entry-id": "alpha",
-                "issue-id": "alpha-01",
-                "issue-name": "Bad Severity",
-                "issue-explanation": "Explanation",
-                "severity": "High",
-                "category": "Other",
-                "security-concern": "Other",
-                "relevant-code": "",
-                "paper-reference": "-",
-            }
-        ]
-        path = _make_gt_json(data, tmp_path)
-        with pytest.raises(ValueError, match="invalid severity"):
-            load_ground_truth(path)
-
     def test_issue_id_auto_generated(self, tmp_path):
         data = [
             {
                 "entry-id": "alpha",
                 "issue-name": "No ID",
                 "issue-explanation": "Explanation here for the test",
-                "severity": "Critical",
-                "category": "Other",
-                "security-concern": "Other",
                 "relevant-code": "",
                 "paper-reference": "-",
             }
@@ -375,9 +265,6 @@ class TestLoadGroundTruthJSON:
                 "issue-id": "zkML-001",
                 "issue-name": "With ID",
                 "issue-explanation": "Explanation here for the test",
-                "severity": "Critical",
-                "category": "Other",
-                "security-concern": "Other",
                 "relevant-code": "",
                 "paper-reference": "-",
             }

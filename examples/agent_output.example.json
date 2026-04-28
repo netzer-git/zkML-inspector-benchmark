@@ -3,9 +3,6 @@
     "entry-id": "zkFoo",
     "issue-name": "Unconstrained activation witness",
     "issue-explanation": "The activation function output is loaded as a free advice cell without any polynomial constraint tying it to the input. A malicious prover can substitute any value for the activation result and still satisfy the circuit.",
-    "severity": "Critical",
-    "category": "Under-constrained Circuit",
-    "security-concern": "Proof Forgery (Soundness)",
     "relevant-code": "src/activation.rs:42-58, src/circuit.rs:120",
     "paper-reference": "Section 4.2: \"Each non-linear operator is enforced via a lookup argument against the precomputed activation table.\""
   },
@@ -13,9 +10,6 @@
     "entry-id": "zkFoo",
     "issue-name": "Challenge derived before commitment",
     "issue-explanation": "The verifier challenge is sampled prior to the prover committing to the witness vector, inverting the commit-before-challenge ordering required by the paper. This breaks the soundness reduction.",
-    "severity": "Critical",
-    "category": "Protocol/Transcript Logic",
-    "security-concern": "Proof Forgery (Soundness)",
     "relevant-code": "src/protocol.rs:201-215",
     "paper-reference": "Protocol 2 Step 3: \"V sends challenge r only after receiving commitments to w and aux.\""
   },
@@ -23,9 +17,6 @@
     "entry-id": "zkFoo",
     "issue-name": "Quantization scale mismatch",
     "issue-explanation": "The implementation uses a 6-bit scale factor in the fixed-point encoding while the paper specifies 12 bits. Downstream precision is ~64x coarser than the paper's stated error analysis assumes.",
-    "severity": "Warning",
-    "category": "Numerical/Quantization Bug",
-    "security-concern": "Semantic Subversion (Integrity)",
     "relevant-code": "config/fixed_point.toml:4, src/quantize.rs:18",
     "paper-reference": "Section 6.1 (Quantization): \"All experiments use a 12-bit fractional scale.\""
   },
@@ -33,9 +24,6 @@
     "entry-id": "zkFoo",
     "issue-name": "Model weights never committed",
     "issue-explanation": "Weight tensors are loaded from disk at proof time and passed directly into the sumcheck reduction without any binding commitment. The verifier has no way to check that proofs refer to a fixed model.",
-    "severity": "Critical",
-    "category": "Witness/Commitment Mismatch",
-    "security-concern": "Semantic Subversion (Integrity)",
     "relevant-code": "src/loader.rs:77-110",
     "paper-reference": "Section 3.3: \"Prior to proving, P commits to the model parameters W and sends the digest to V.\""
   },
@@ -43,9 +31,6 @@
     "entry-id": "zkFoo",
     "issue-name": "Bias addition omitted",
     "issue-explanation": "The linear-layer proof only covers the matrix-multiply relation; the bias vector add is performed outside the circuit and taken on trust. The paper's reference implementation includes bias.",
-    "severity": "Warning",
-    "category": "Specification Mismatch",
-    "security-concern": "Semantic Subversion (Integrity)",
     "relevant-code": "src/layers/linear.rs:63",
     "paper-reference": "Section 5.1: linear layer y = Wx + b is proved via a single sumcheck over both terms."
   },
@@ -53,9 +38,6 @@
     "entry-id": "zkFoo",
     "issue-name": "Constant-time witness generation",
     "issue-explanation": "All witness tensors are generated with a fixed timing profile regardless of input magnitude. No security impact observed, but this is worth noting as a defensive-coding best practice.",
-    "severity": "Info",
-    "category": "Engineering/Prototype Gap",
-    "security-concern": "Information Leakage (Privacy)",
     "relevant-code": "",
     "paper-reference": "-"
   },
@@ -63,9 +45,6 @@
     "entry-id": "zkBar",
     "issue-name": "Range check bypass via feature flag",
     "issue-explanation": "A cargo feature named fast_prove disables the range-check gadget for performance. With the flag enabled, out-of-range field elements can be committed without detection.",
-    "severity": "Critical",
-    "category": "Engineering/Prototype Gap",
-    "security-concern": "Proof Forgery (Soundness)",
     "relevant-code": "Cargo.toml:22, src/range.rs:8-11",
     "paper-reference": "-"
   },
@@ -73,9 +52,6 @@
     "entry-id": "zkBar",
     "issue-name": "Transcript reused across proofs",
     "issue-explanation": "A single global Fiat-Shamir transcript is shared between sequential proofs in the same process. An attacker who can influence one proof session can forge another via cross-session challenge reuse.",
-    "severity": "Warning",
-    "category": "Protocol/Transcript Logic",
-    "security-concern": "Proof Malleability",
     "relevant-code": "src/transcript.rs:14-27",
     "paper-reference": "Section 2 (Fiat-Shamir): \"A fresh transcript is initialized for each proof session.\""
   }

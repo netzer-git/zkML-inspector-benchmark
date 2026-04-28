@@ -8,7 +8,6 @@ judge's numeric confidence (match_score >= threshold) AND its semantic verdict
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass, field
 
 from grader.loader import AgentFinding, GroundTruthFinding
@@ -48,14 +47,6 @@ class MatchResult:
     missed_gt: list[GroundTruthFinding] = field(default_factory=list)
     extra_agent: list[AgentFinding] = field(default_factory=list)
     traces: list[AgentFindingTrace] = field(default_factory=list)
-
-    @property
-    def extra_by_severity(self) -> dict[str, list[AgentFinding]]:
-        """Group extra findings by severity for differentiated reporting."""
-        groups: dict[str, list[AgentFinding]] = defaultdict(list)
-        for af in self.extra_agent:
-            groups[af.severity].append(af)
-        return dict(groups)
 
 
 def _build_matching_text(

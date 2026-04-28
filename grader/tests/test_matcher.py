@@ -21,7 +21,6 @@ def _gt(
     issue_id: str,
     name: str,
     explanation: str = "default explanation",
-    severity: str = "Critical",
     paper: str = "-",
     code: list[CodeRef] | None = None,
 ) -> GroundTruthFinding:
@@ -30,9 +29,6 @@ def _gt(
         issue_id=issue_id,
         issue_name=name,
         issue_explanation=explanation,
-        severity=severity,
-        category="Other",
-        security_concern="Other",
         relevant_code=code or [],
         paper_reference=paper,
     )
@@ -41,7 +37,6 @@ def _gt(
 def _agent(
     name: str,
     explanation: str = "default explanation",
-    severity: str = "Critical",
     paper: str = "-",
     code: list[CodeRef] | None = None,
 ) -> AgentFinding:
@@ -49,9 +44,6 @@ def _agent(
         entry_id="test",
         issue_name=name,
         issue_explanation=explanation,
-        severity=severity,
-        category="Other",
-        security_concern="Other",
         relevant_code=code or [],
         paper_reference=paper,
     )
@@ -102,12 +94,11 @@ class TestBuildMatchingText:
         assert "e x" in text
         assert "s 1" in text
 
-    def test_does_not_include_code_or_severity(self):
+    def test_does_not_include_code_or_closed_list(self):
         """Sanity: the builder doesn't take code refs or closed-list fields."""
         text = _build_matching_text("widget bug", "expl", "-")
         assert "widget bug" in text
         # These should not appear unless we pass them in
-        assert "Critical" not in text
         assert ".rs" not in text
 
 
@@ -291,15 +282,11 @@ class TestJudgeTextContent:
         assert "agent_file" not in prompt
         assert ":42" not in prompt
 
-    def test_severity_and_category_not_shown(self):
+    def test_closed_list_fields_not_shown(self):
         """Closed-list fields must NOT appear in the judge prompt."""
-        gt = [_gt("T-01", "n", "e", severity="Critical")]
-        agent = [_agent("ag", severity="Warning")]
+        gt = [_gt("T-01", "n", "e")]
+        agent = [_agent("ag")]
         prompt = self._capture_user_prompt(gt, agent)
-        # Severity-value words shouldn't appear unless the name/explanation
-        # happens to include them — our synthetic "n", "e" don't.
-        assert "Critical" not in prompt
-        assert "Warning" not in prompt
         # Category "Other" is the default on both helpers; make sure it's absent
         assert "Other" not in prompt
 
@@ -418,34 +405,19 @@ class TestCandidateIds:
 # ---------------------------------------------------------------------------
 
 class TestMatchResultExtras:
-    def test_extra_by_severity_empty(self):
+    def test_extra_agent_empty(self):
         result = MatchResult()
-        assert result.extra_by_severity == {}
+        assert result.extra_agent == []
 
-    def test_extra_by_severity_grouped(self):
+    def test_extra_agent_collected(self):
         result = MatchResult(
             extra_agent=[
-                _agent("A", severity="Critical"),
-                _agent("B", severity="Warning"),
-                _agent("C", severity="Critical"),
-                _agent("D", severity="Info"),
+                _agent("A"),
+                _agent("B"),
+                _agent("C"),
             ]
         )
-        by_sev = result.extra_by_severity
-        assert len(by_sev["Critical"]) == 2
-        assert len(by_sev["Warning"]) == 1
-        assert len(by_sev["Info"]) == 1
-
-    def test_extra_by_severity_single_type(self):
-        result = MatchResult(
-            extra_agent=[
-                _agent("A", severity="Warning"),
-                _agent("B", severity="Warning"),
-            ]
-        )
-        by_sev = result.extra_by_severity
-        assert list(by_sev.keys()) == ["Warning"]
-        assert len(by_sev["Warning"]) == 2
+        assert len(result.extra_agent) == 3
 
 
 # ---------------------------------------------------------------------------

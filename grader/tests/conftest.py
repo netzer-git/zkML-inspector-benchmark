@@ -38,16 +38,13 @@ def word_overlap_similarity() -> WordOverlapSimilarity:
 
 
 # Synthetic ground-truth findings. Two fictional projects, five findings
-# covering all three severities, five categories, four security concerns.
+# covering five categories, four security concerns.
 _FICTIONAL_GT_ROWS: list[dict[str, str]] = [
     {
         "entry-id": "alpha",
         "issue-id": "alpha-01",
         "issue-name": "Unchecked gate output",
         "issue-explanation": "Output of the widget gate is written directly to the advice column without a range constraint, so the prover can write any field element.",
-        "severity": "Critical",
-        "category": "Under-constrained Circuit",
-        "security-concern": "Proof Forgery (Soundness)",
         "relevant-code": "src/widget.rs:22-30, src/circuit.rs:88",
         "paper-reference": 'Section 3.1: "Each widget output must be range-checked before use."',
     },
@@ -56,9 +53,6 @@ _FICTIONAL_GT_ROWS: list[dict[str, str]] = [
         "issue-id": "alpha-02",
         "issue-name": "Static prover seed",
         "issue-explanation": "The witness-generation PRNG is seeded with a compile-time constant, making witness entropy predictable.",
-        "severity": "Warning",
-        "category": "Engineering/Prototype Gap",
-        "security-concern": "Semantic Subversion (Integrity)",
         "relevant-code": "src/prover.rs:44",
         "paper-reference": "-",
     },
@@ -67,9 +61,6 @@ _FICTIONAL_GT_ROWS: list[dict[str, str]] = [
         "issue-id": "alpha-03",
         "issue-name": "Accumulator width note",
         "issue-explanation": "Accumulator uses 128 bits, much wider than the paper's stated 64-bit bound. No impact but noted for the record.",
-        "severity": "Info",
-        "category": "Numerical/Quantization Bug",
-        "security-concern": "Other",
         "relevant-code": "",
         "paper-reference": 'Section 4.2: "Accumulator width is bounded by log(n)."',
     },
@@ -78,9 +69,6 @@ _FICTIONAL_GT_ROWS: list[dict[str, str]] = [
         "issue-id": "beta-01",
         "issue-name": "Commitment binds wrong tensor",
         "issue-explanation": "The gadget commits to the parameter tensor but the verifier reconstructs the digest from the input tensor, so the two never match.",
-        "severity": "Critical",
-        "category": "Witness/Commitment Mismatch",
-        "security-concern": "Semantic Subversion (Integrity)",
         "relevant-code": "src/gadget.rs:100-120",
         "paper-reference": 'Protocol 1 Step 2: "P commits to parameters before sending them to V."',
     },
@@ -89,16 +77,13 @@ _FICTIONAL_GT_ROWS: list[dict[str, str]] = [
         "issue-id": "beta-02",
         "issue-name": "Transcript missing public input",
         "issue-explanation": "Public inputs are never hashed into the transcript, so two proofs with different public inputs can share verifier challenges.",
-        "severity": "Warning",
-        "category": "Protocol/Transcript Logic",
-        "security-concern": "Proof Malleability",
         "relevant-code": "src/transcript.rs:55",
         "paper-reference": "-",
     },
 ]
 
 
-# Synthetic agent output. Three matches (one with severity mismatch),
+# Synthetic agent output. Three matches,
 # two missed GT findings (alpha-03, beta-02), one extra/novel finding.
 _FICTIONAL_AGENT_OUTPUT: list[dict[str, str]] = [
     {
@@ -106,20 +91,14 @@ _FICTIONAL_AGENT_OUTPUT: list[dict[str, str]] = [
         "entry-id": "alpha",
         "issue-name": "Unchecked gate output",
         "issue-explanation": "Widget gate output is written to advice without range check, allowing arbitrary field elements from the prover.",
-        "severity": "Critical",
-        "category": "Under-constrained Circuit",
-        "security-concern": "Proof Forgery (Soundness)",
         "relevant-code": "src/widget.rs:25",
         "paper-reference": 'Section 3.1: "Each widget output must be range-checked before use."',
     },
     {
-        # Matches alpha-02 but under-reports severity (Warning -> Info)
+        # Matches alpha-02
         "entry-id": "alpha",
         "issue-name": "Static prover seed",
         "issue-explanation": "The prover PRNG uses a compile-time constant seed.",
-        "severity": "Info",
-        "category": "Engineering/Prototype Gap",
-        "security-concern": "Semantic Subversion (Integrity)",
         "relevant-code": "src/prover.rs:44",
         "paper-reference": "-",
     },
@@ -128,9 +107,6 @@ _FICTIONAL_AGENT_OUTPUT: list[dict[str, str]] = [
         "entry-id": "beta",
         "issue-name": "Commitment bound to wrong tensor",
         "issue-explanation": "The gadget commits to parameters but the verifier reconstructs the digest from the input, so verification cannot succeed against the committed value.",
-        "severity": "Critical",
-        "category": "Witness/Commitment Mismatch",
-        "security-concern": "Semantic Subversion (Integrity)",
         "relevant-code": "src/gadget.rs:105-110",
         "paper-reference": 'Protocol 1 Step 2: "P commits to parameters before sending them to V."',
     },
@@ -139,9 +115,6 @@ _FICTIONAL_AGENT_OUTPUT: list[dict[str, str]] = [
         "entry-id": "beta",
         "issue-name": "Redundant constraint in wrapper",
         "issue-explanation": "A defensive constraint is duplicated in the wrapper layer. Benign but could be removed.",
-        "severity": "Warning",
-        "category": "Engineering/Prototype Gap",
-        "security-concern": "Other",
         "relevant-code": "src/wrapper.rs:200",
         "paper-reference": "-",
     },

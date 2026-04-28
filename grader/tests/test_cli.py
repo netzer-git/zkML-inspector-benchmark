@@ -13,9 +13,8 @@ from pathlib import Path
 import pytest
 
 import grader.cli as cli_module
-from grader.cli import _build_backend, _parse_weights, main
+from grader.cli import _build_backend, main
 from grader.llm import MockLLMProvider
-from grader.report import DEFAULT_WEIGHTS
 from grader.similarity import LLMJudgeSimilarity
 
 
@@ -59,34 +58,6 @@ def _bulk_responder(score_map: dict[str, float]):
             ]
         }
     return _responder
-
-
-# ---------------------------------------------------------------------------
-# _parse_weights
-# ---------------------------------------------------------------------------
-
-class TestParseWeights:
-    def test_none_returns_defaults(self):
-        w = _parse_weights(None)
-        assert w == DEFAULT_WEIGHTS
-
-    def test_override_single(self):
-        w = _parse_weights("severity=0.5")
-        assert w["severity"] == 0.5
-        assert w["category"] == DEFAULT_WEIGHTS["category"]
-
-    def test_override_multiple(self):
-        w = _parse_weights("severity=0.2, code_location=0.4")
-        assert w["severity"] == 0.2
-        assert w["code_location"] == 0.4
-
-    def test_invalid_field_raises(self):
-        with pytest.raises(ValueError, match="Unknown weight field"):
-            _parse_weights("nonexistent=0.5")
-
-    def test_float_parsing(self):
-        w = _parse_weights("severity=0.123")
-        assert w["severity"] == pytest.approx(0.123)
 
 
 # ---------------------------------------------------------------------------
@@ -184,25 +155,7 @@ class TestMainEndToEnd:
         ])
         data = json.loads(Path(out_json).read_text(encoding="utf-8"))
         assert data["meta"]["match_threshold"] == 5
-        assert data["overall"]["total_matched"] <= data["overall"]["total_gt"]
-
-    def test_custom_weights(
-        self, tmp_path, fictional_gt_json_path, fictional_agent_json_path,
-        reset_override,
-    ):
-        cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
-            _bulk_responder({})
-        )
-        out_json = str(tmp_path / "report.json")
-        main([
-            "--ground-truth", str(fictional_gt_json_path),
-            "--agent-output", str(fictional_agent_json_path),
-            "--weights", "severity=0.5,code_location=0.1",
-            "--output", out_json,
-        ])
-        data = json.loads(Path(out_json).read_text(encoding="utf-8"))
-        assert data["meta"]["weights"]["severity"] == 0.5
-        assert data["meta"]["weights"]["code_location"] == 0.1
+        assert data["overall"]["total_passed"] <= data["overall"]["total_gt"]
 
     def test_projects_present(
         self, tmp_path, fictional_gt_json_path, fictional_agent_json_path,
@@ -234,7 +187,7 @@ class TestMainEndToEnd:
             "--agent-output", str(fictional_agent_json_path),
         ])
         captured = capsys.readouterr()
-        assert "benchmark_score" in captured.out
+        assert "recall" in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -368,7 +321,7 @@ class TestPerProjectErrorIsolation:
         data = json.loads(Path(out_json).read_text(encoding="utf-8"))
         assert data["projects"] == {}
         assert len(data["meta"]["failed_projects"]) == 2  # alpha + beta
-        assert data["overall"]["total_matched"] == 0
+        assert data["overall"]["total_passed"] == 0
 
     def test_skipped_projects_recorded_in_meta(
         self, tmp_path, fictional_gt_json_path, reset_override,
@@ -380,9 +333,6 @@ class TestPerProjectErrorIsolation:
             "entry-id": "gamma",  # not in fictional GT
             "issue-name": "Foo",
             "issue-explanation": "Bar",
-            "severity": "Warning",
-            "category": "Other",
-            "security-concern": "Other",
             "relevant-code": "",
             "paper-reference": "-",
         }]))
@@ -583,7 +533,7 @@ class TestGradeReportBadges:
     ):
         """When pair scores are low (below 0.4), the red badge should appear."""
         # Force low pair_scores by making the matches clear threshold but
-        # agent severity/category/etc differ from GT.
+        # agent category/etc differ from GT.
         cli_module._LLM_PROVIDER_OVERRIDE = MockLLMProvider(
             _bulk_responder({"alpha-01": 5})
         )
@@ -594,7 +544,6 @@ class TestGradeReportBadges:
             "entry-id": "alpha",
             "issue-name": "Something",
             "issue-explanation": "Unrelated words entirely here",
-            "severity": "Info",       # GT is Critical -> severity score 0
             "category": "Other",      # GT is Under-constrained Circuit -> 0
             "security-concern": "Other",  # GT is Proof Forgery -> 0.1
             "relevant-code": "wrong/path.rs:999",  # no match
