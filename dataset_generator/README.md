@@ -3,7 +3,7 @@
 Generates benchmark cases by applying strict-v2 bug artifacts to fixed codebases and emitting ground-truth findings JSON.
 
 Sources (papers, codebases, artifacts) are loaded from the
-[`Netzerep/zkml-audit-benchmark`](https://huggingface.co/datasets/Netzerep/zkml-audit-benchmark)
+[`Anonymous648/zkml-audit-benchmark`](https://huggingface.co/datasets/Anonymous648/zkml-audit-benchmark)
 Hugging Face dataset via `dataset_loader`.
 
 ## Usage

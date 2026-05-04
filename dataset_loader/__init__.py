@@ -1,7 +1,7 @@
 """HF-backed dataset loader for zkml-audit-benchmark.
 
 Downloads papers, codebases, and artifacts from the Hugging Face dataset
-``Netzerep/zkml-audit-benchmark`` and provides a typed API for the
+``Anonymous648/zkml-audit-benchmark`` and provides a typed API for the
 dataset_generator and grader pipelines.
 """
 
@@ -18,7 +18,7 @@ from huggingface_hub import hf_hub_download, list_repo_tree
 
 __version__ = "0.1.0"
 
-DEFAULT_REPO_ID = "Netzerep/zkml-audit-benchmark"
+DEFAULT_REPO_ID = "Anonymous648/zkml-audit-benchmark"
 
 # Artifact-ID prefix → pair_id mapping (authoritative)
 _PREFIX_TO_PAIR: dict[str, str] = {

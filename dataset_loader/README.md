@@ -1,7 +1,7 @@
 # dataset_loader
 
 Downloads and materializes (paper, codebase) pairs from the
-[`Netzerep/zkml-audit-benchmark`](https://huggingface.co/datasets/Netzerep/zkml-audit-benchmark)
+[`Anonymous648/zkml-audit-benchmark`](https://huggingface.co/datasets/Anonymous648/zkml-audit-benchmark)
 Hugging Face dataset for agent auditing runs.
 
 ## Installation
@@ -26,7 +26,7 @@ python -m dataset_loader materialize --output ./run_set --pairs zkllm,zkml
 
 The `materialize` command downloads papers and codebases, extracts them to a
 flat layout, and emits a `batch_manifest.json` compatible with
-zkml-inspector's `/analyze-batch` workflow:
+an external audit agent's batch-analyze workflow:
 
 ```
 run_set/
@@ -45,7 +45,7 @@ run_set/
 from dataset_loader import BenchmarkDataset
 from dataset_loader.materialize import materialize
 
-ds = BenchmarkDataset()        # defaults to Netzerep/zkml-audit-benchmark
+ds = BenchmarkDataset()        # defaults to Anonymous648/zkml-audit-benchmark
 ds.pair_ids()                  # ['zkgpt', 'zkllm', 'zkml', 'zktorch']
 ds.artifact_ids(pair_id="zkllm")  # ['zkLLM-001', ..., 'zkLLM-014']
 

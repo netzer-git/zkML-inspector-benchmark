@@ -1,7 +1,7 @@
 """Materialize a run-set directory from the HF benchmark dataset.
 
-The output layout is directly consumable by zkml-inspector's
-``/analyze-batch`` workflow.
+The output layout is directly consumable by an audit agent's
+batch-analyze workflow.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ def materialize(
         Subset of pairs to materialize.  ``None`` means all pairs.
     emit_batch_manifest:
         If ``True`` (default), write a ``batch_manifest.json`` compatible
-        with the zkml-inspector ``/analyze-batch`` prompt.
+        with an audit agent's batch-analyze workflow.
 
     Returns
     -------

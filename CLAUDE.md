@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repo purpose
 
-Benchmark suite for ZK-ML audit agents. Three components work together end-to-end: `dataset_loader/` downloads papers, codebases, and artifacts from the [`Netzerep/zkml-audit-benchmark`](https://huggingface.co/datasets/Netzerep/zkml-audit-benchmark) HF dataset and materializes (paper PDF, codebase) pairs for agent runs; `dataset_generator/` produces benchmark cases by applying bug artifacts to the clean codebases and emitting ground-truth findings JSON; and `grader/` scores the agent's JSON output against the ground truth.
+Benchmark suite for ZK-ML audit agents. Three components work together end-to-end: `dataset_loader/` downloads papers, codebases, and artifacts from the [`Anonymous648/zkml-audit-benchmark`](https://huggingface.co/datasets/Anonymous648/zkml-audit-benchmark) HF dataset and materializes (paper PDF, codebase) pairs for agent runs; `dataset_generator/` produces benchmark cases by applying bug artifacts to the clean codebases and emitting ground-truth findings JSON; and `grader/` scores the agent's JSON output against the ground truth.
 
 ## Common commands
 
